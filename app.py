@@ -11,7 +11,7 @@ import requests
 GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-DB_PATH = os.getenv("DB_PATH", "secondbrain.db")
+DB_PATH = os.getenv("DB_PATH")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
