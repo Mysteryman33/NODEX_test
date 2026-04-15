@@ -6,12 +6,8 @@ services:
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 60
     envVars:
       - key: GROQ_API_KEY
-        sync: false          # set this manually in Render dashboard
+        sync: false
       - key: SECRET_KEY
-        generateValue: true  # Render auto-generates a secure random value
-      - key: DB_PATH
-        value: /var/data/secondbrain.db
-    disk:
-      name: secondbrain-data
-      mountPath: /var/data
-      sizeGB: 1
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false   # you will set this manually after creating the Postgres DB
