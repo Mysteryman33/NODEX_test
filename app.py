@@ -43,6 +43,11 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id INTEGER PRIMARY KEY,
+            settings JSONB NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
     """)
     conn.commit()
     cursor.close()
@@ -54,7 +59,7 @@ if DATABASE_URL:
 def hash_password(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
-# ── Auth routes (Updated for PostgreSQL) ──────────────────────────────────────
+# ── Auth routes ───────────────────────────────────────────────────────────────
 
 LOGIN_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -89,8 +94,8 @@ body{
 .bg-grid{
   position:fixed;inset:0;pointer-events:none;
   background-image:
-    linear-gradient(rgba(124,58,237,0.04) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(124,58,237,0.04) 1px,transparent 1px);
+    linear-gradient(rgba(124,58,237,0.15) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(124,58,237,0.15) 1px,transparent 1px);
   background-size:40px 40px;
 }
 .glow-orb{
@@ -306,12 +311,12 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   font-family:'JetBrains Mono',ui-monospace,monospace;
   overflow:hidden;}
 
-/* Grid background */
+/* Grid background - Visible Grid Update */
 .bg-grid{
   position:fixed;inset:0;pointer-events:none;z-index:0;
   background-image:
-    linear-gradient(rgba(124,58,237,0.045) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(124,58,237,0.045) 1px,transparent 1px);
+    linear-gradient(rgba(124,58,237,0.15) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(124,58,237,0.15) 1px,transparent 1px);
   background-size:40px 40px;
 }
 
@@ -340,6 +345,16 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   position:absolute;top:0;left:0;
 }
 #link-layer{position:absolute;inset:0;pointer-events:auto;}
+
+/* Lasso Selection Box */
+#lasso-box {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  background: rgba(124,58,237,0.15);
+  pointer-events: none;
+  z-index: 500;
+  display: none;
+}
 
 /* ── NODES ── */
 .node{position:absolute;cursor:grab;user-select:none;font-size:12px;line-height:1.3;z-index:10;}
@@ -382,6 +397,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .node-note .node-circle{
   background:var(--node-note);
   box-shadow:0 0 8px rgba(147,197,253,0.4),0 0 2px rgba(147,197,253,0.4);
+}
+.node-brainstorm .node-circle{
+  background:var(--orange);
+  box-shadow:0 0 8px rgba(249,115,22,0.4),0 0 2px rgba(249,115,22,0.4);
 }
 
 /* Selected: purple outline + glow */
@@ -433,6 +452,13 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   color:var(--text);font-family:inherit;font-size:12px;padding:8px 10px;outline:none;
 }
 .note-body:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft);}
+
+/* Brainstorm Node UI */
+.brainstorm-wrap { display: flex; flex-direction: column; gap: 4px; width: 180px;}
+.brainstorm-input { background: var(--surface2); border: 1px solid var(--border2); color: var(--text); padding: 6px 8px; font-size: 11px; outline: none; border-radius: 6px; font-family: inherit;}
+.brainstorm-input:focus { border-color: var(--orange); }
+.brainstorm-run { background: var(--orange); color: white; font-weight: bold; font-family: inherit; border: none; padding: 6px 8px; font-size: 11px; cursor: pointer; border-radius: 6px; transition: opacity 0.2s; }
+.brainstorm-run:hover { opacity: 0.8; }
 
 /* Timer */
 .timer-ring{position:relative;width:80px;height:80px;display:flex;align-items:center;justify-content:center;}
@@ -600,9 +626,11 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
     <button class="top-btn" id="auto-btn">Auto</button>
     <button class="top-btn" id="group-btn">Group</button>
     <button class="top-btn" id="note-btn">Note</button>
+    <button class="top-btn" id="brainstorm-btn">Brainstorm</button>
     <div class="user-badge" id="user-badge">…</div>
   </div>
   <div id="canvas-wrapper">
+    <div id="lasso-box"></div>
     <div id="canvas">
       <svg id="link-layer"></svg>
     </div>
@@ -680,6 +708,10 @@ let SCALE_STEP=0.08;
 const CANVAS_W=8000, CANVAS_H=8000;
 const ORIGIN_X=3000, ORIGIN_Y=3000;
 let hasActiveContext=false;
+let explicitlyDeselected=false;
+
+let isLassoing=false;
+let lassoStartX=0, lassoStartY=0;
 
 const GROUP_COLORS=["#f87171","#fb923c","#fbbf24","#a3e635","#34d399","#22d3ee","#60a5fa","#a78bfa","#f472b6","#e2e8f0"];
 const SLASH_COMMANDS=[
@@ -698,6 +730,7 @@ const suggestionsBar=document.getElementById("suggestions-bar");
 const slashPopup=document.getElementById("slash-popup");
 const colorPickerPopup=document.getElementById("color-picker-popup");
 const ctxMenu=document.getElementById("ctx-menu");
+const lassoBox=document.getElementById("lasso-box");
 
 // ── User badge ────────────────────────────────────────────────────────────────
 fetch("/auth/me").then(r=>r.json()).then(d=>{
@@ -755,7 +788,10 @@ function initZoom(){
 
 document.getElementById("zoom-in-btn").onclick=()=>applyZoom(currentScale+SCALE_STEP);
 document.getElementById("zoom-out-btn").onclick=()=>applyZoom(currentScale-SCALE_STEP);
-document.getElementById("zoom-speed-select").addEventListener("change",function(){SCALE_STEP=parseFloat(this.value);});
+document.getElementById("zoom-speed-select").addEventListener("change",function(){
+  SCALE_STEP=parseFloat(this.value);
+  saveSettings();
+});
 canvasWrapper.addEventListener("wheel",e=>{
   if(e.ctrlKey||e.metaKey){
     e.preventDefault();
@@ -766,14 +802,11 @@ canvasWrapper.addEventListener("wheel",e=>{
 },{passive:false});
 
 // ── Smart Recenter ────────────────────────────────────────────────────────────
-// Gathers ALL visible things (expanded nodes, collapsed group boxes) and fits them
 document.getElementById("recenter-btn").onclick=()=>smartRecenter();
 
 function smartRecenter(animate=true){
   const pts=[];
-  // Expanded nodes (visible)
   nodes.forEach(n=>{
-    // skip nodes in collapsed groups
     if(n.groupId!==undefined){
       const g=groups.find(x=>x.id===n.groupId);
       if(g&&g.collapsed)return;
@@ -782,7 +815,6 @@ function smartRecenter(animate=true){
     const w=el?el.offsetWidth:100,h=el?el.offsetHeight:40;
     pts.push({x:n.x,y:n.y,w,h});
   });
-  // Collapsed group boxes
   groups.forEach(g=>{
     if(g.collapsed){
       const cx=g.collapsedX||ORIGIN_X,cy=g.collapsedY||ORIGIN_Y;
@@ -800,7 +832,6 @@ function smartRecenter(animate=true){
     return;
   }
 
-  // Bounding box of all visible content
   const xs1=pts.map(p=>p.x), xs2=pts.map(p=>p.x+(p.w||100));
   const ys1=pts.map(p=>p.y), ys2=pts.map(p=>p.y+(p.h||40));
   const minX=Math.min(...xs1), maxX=Math.max(...xs2);
@@ -838,8 +869,35 @@ function applyDimClass(el,dim){for(let i=0;i<=4;i++)el.classList.remove("dim-"+i
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 document.getElementById("settings-btn").onclick=()=>document.getElementById("settings-modal").classList.add("visible");
-document.getElementById("settings-close-btn").onclick=()=>document.getElementById("settings-modal").classList.remove("visible");
-document.getElementById("settings-modal").addEventListener("click",e=>{if(e.target===document.getElementById("settings-modal"))document.getElementById("settings-modal").classList.remove("visible");});
+document.getElementById("settings-close-btn").onclick=()=>{
+  document.getElementById("settings-modal").classList.remove("visible");
+  saveSettings();
+};
+document.getElementById("settings-modal").addEventListener("click",e=>{
+  if(e.target===document.getElementById("settings-modal")) {
+    document.getElementById("settings-modal").classList.remove("visible");
+    saveSettings();
+  }
+});
+
+async function saveSettings() {
+  const settings = { zoomSpeed: document.getElementById("zoom-speed-select").value };
+  try {
+    await fetch("/save_settings", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(settings) });
+  } catch(e){}
+}
+async function loadSettings() {
+  try {
+    const r=await fetch("/load_settings");
+    if(r.ok) {
+      const data = await r.json();
+      if(data.zoomSpeed) {
+        document.getElementById("zoom-speed-select").value = data.zoomSpeed;
+        SCALE_STEP = parseFloat(data.zoomSpeed);
+      }
+    }
+  } catch(e){}
+}
 
 // ── Undo / Redo ───────────────────────────────────────────────────────────────
 function captureSnapshot(){
@@ -938,7 +996,6 @@ function addNodeToGroup(nodeId,gid){
   redrawGroups();saveGraph();
 }
 
-// ── Smart collapse: save bounds center as collapse position ───────────────────
 function collapseGroup(gid){
   const g=groups.find(x=>x.id===gid);if(!g||g.collapsed)return;
   pushUndo();
@@ -946,7 +1003,6 @@ function collapseGroup(gid){
   g.nodeIds.forEach(nid=>{const n=nodes.find(x=>x.id===nid);if(n)g.savedPositions[nid]={x:n.x,y:n.y};});
   const bounds=getGroupBounds(g);
   if(bounds){
-    // Place collapsed box at the visual center of the group
     const cx=(bounds.minX+bounds.maxX)/2-((g.collapsedW||160)/2);
     const cy=(bounds.minY+bounds.maxY)/2-((g.collapsedH||60)/2);
     g.collapsedX=cx;g.collapsedY=cy;
@@ -954,11 +1010,9 @@ function collapseGroup(gid){
   g.collapsed=true;
   g.nodeIds.forEach(nid=>{const el=getNodeEl(nid);if(el)el.style.display="none";});
   redrawLinks();redrawGroups();saveGraph();
-  // Smart recenter after collapse so view adjusts seamlessly
   setTimeout(()=>smartRecenter(true),80);
 }
 
-// ── Smart expand: animate nodes back out from collapse position ───────────────
 function expandGroup(gid,skipSave){
   const g=groups.find(x=>x.id===gid);if(!g||!g.collapsed)return;
   g.collapsed=false;
@@ -970,7 +1024,6 @@ function expandGroup(gid,skipSave){
       if(el){
         el.style.display="";
         if(n){el.style.left=n.x+"px";el.style.top=n.y+"px";}
-        // Fade in
         el.style.opacity="0";
         el.style.transform="scale(0.85)";
         el.style.transition="opacity .25s ease,transform .25s ease";
@@ -983,7 +1036,6 @@ function expandGroup(gid,skipSave){
   }
   redrawLinks();redrawGroups();
   if(!skipSave)saveGraph();
-  // Smart recenter after expand
   setTimeout(()=>smartRecenter(true),120);
 }
 
@@ -1111,6 +1163,13 @@ document.getElementById("group-btn").onclick=()=>{
   colorPickerPopup.classList.add("visible");
 };
 
+// ── Brainstorm ────────────────────────────────────────────────────────────────
+document.getElementById("brainstorm-btn").onclick=()=>{
+  const x=(canvasWrapper.scrollLeft+canvasWrapper.clientWidth/2)/currentScale-120;
+  const y=(canvasWrapper.scrollTop+canvasWrapper.clientHeight/2)/currentScale-60;
+  addNode("","brainstorm",x,y,{topic:""});
+};
+
 // ── Timer ─────────────────────────────────────────────────────────────────────
 function createTimerContent(node){
   const wrap=document.createElement("div");wrap.className="timer-ring";
@@ -1185,6 +1244,36 @@ function createNodeElement(node){
     bodyIn.addEventListener("keydown",e=>e.stopPropagation());
     wrap.appendChild(titleIn);wrap.appendChild(bodyIn);
     textWrap.appendChild(wrap);
+  } else if(node.type==="brainstorm"){
+    const wrap=document.createElement("div");wrap.className="brainstorm-wrap";
+    const input=document.createElement("input");input.className="brainstorm-input";
+    input.placeholder="Topic...";input.value=node.meta.topic||"";
+    input.addEventListener("input",e=>{e.stopPropagation();node.meta.topic=input.value;saveGraph();});
+    input.addEventListener("mousedown",e=>{if(document.activeElement===input)e.stopPropagation();});
+    input.addEventListener("click",e=>{e.stopPropagation();input.focus();});
+    input.addEventListener("keydown",e=>e.stopPropagation());
+    
+    const runBtn=document.createElement("button");runBtn.className="brainstorm-run";runBtn.textContent="Run";
+    runBtn.onclick=async (e)=>{
+      e.stopPropagation();
+      if(!input.value.trim())return;
+      runBtn.textContent="Running...";
+      try {
+        const r=await fetch("/brainstorm",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:input.value})});
+        const d=await r.json();
+        const ideas=d.nodes||[];
+        let offset=0;
+        ideas.forEach(idea=>{
+          const n=addNode(idea,"answer",node.x+240,node.y+offset);
+          addLink(node.id,n.id);
+          offset+=80;
+        });
+        saveGraph();
+      } catch(err){}
+      runBtn.textContent="Run";
+    };
+    wrap.appendChild(input);wrap.appendChild(runBtn);
+    textWrap.appendChild(wrap);
   } else {
     textWrap.textContent=node.text;
   }
@@ -1200,8 +1289,8 @@ function createNodeElement(node){
   el.addEventListener("mouseleave",()=>{if(isCtrlHeld)clearCtrlHighlights();});
 
   el.addEventListener("mousedown",e=>{
-    if(e.shiftKey){e.stopPropagation();deleteNode(node.id);return;}
-    if(node.type==="note"&&(e.target.tagName==="TEXTAREA"||e.target.tagName==="INPUT")){if(document.activeElement===e.target){return;}}
+    if(e.shiftKey)return;
+    if((node.type==="note"||node.type==="brainstorm")&&(e.target.tagName==="TEXTAREA"||e.target.tagName==="INPUT")){if(document.activeElement===e.target){return;}}
     e.stopPropagation();
     draggingNode=node;
     const cc=clientToCanvas(e.clientX,e.clientY);
@@ -1210,7 +1299,31 @@ function createNodeElement(node){
 
   el.addEventListener("click",e=>{
     e.stopPropagation();
-    if(e.shiftKey)return;
+    if(e.shiftKey && (e.ctrlKey || e.metaKey)){
+      e.preventDefault();
+      // Tree Branch Selection (Depth First Search on connected nodes)
+      let q = [node.id];
+      let vis = new Set([node.id]);
+      while(q.length) {
+        let curr = q.shift();
+        links.forEach(l => {
+          if (l.sourceId === curr && !vis.has(l.targetId)) { vis.add(l.targetId); q.push(l.targetId); }
+          if (l.targetId === curr && !vis.has(l.sourceId)) { vis.add(l.sourceId); q.push(l.sourceId); }
+        });
+      }
+      vis.forEach(id => {
+        let n = nodes.find(x=>x.id===id);
+        if(n) {
+          n.selected = true;
+          let nel = getNodeEl(id);
+          if(nel) nel.classList.add("selected");
+        }
+      });
+      hasActiveContext=true;
+      updateSuggestionsDebounced();
+      return;
+    }
+    if(e.shiftKey){deleteNode(node.id);return;}
     if(e.ctrlKey||e.metaKey){
       e.preventDefault();
       [node,...ctrlHighlightedNodes].forEach(n=>{n.selected=true;const nel=getNodeEl(n.id);if(nel)nel.classList.add("selected");});
@@ -1233,9 +1346,15 @@ function addNode(text,type,x=ORIGIN_X,y=ORIGIN_Y,meta={}){
   const node={id:nextNodeId++,x,y,type,text,selected:false,dim:0,meta,completed:false};
   nodes.push(node);createNodeElement(node);
   const sel=getSelectedNodes();
-  if(sel.length>0)sel.forEach(s=>addLink(s.id,node.id));
-  else if(lastNodeId!==null)addLink(lastNodeId,node.id);
-  lastNodeId=node.id;saveGraph();return node;
+  if(sel.length>0) {
+    sel.forEach(s=>addLink(s.id,node.id));
+  } else if(!explicitlyDeselected && lastNodeId!==null) {
+    addLink(lastNodeId,node.id);
+  }
+  explicitlyDeselected=false; // Reset after prompt
+  lastNodeId=node.id;
+  saveGraph();
+  return node;
 }
 
 // ── Links ─────────────────────────────────────────────────────────────────────
@@ -1351,16 +1470,79 @@ document.addEventListener("mouseup",async e=>{
   hideMergeHint();
 });
 
-// ── Panning ───────────────────────────────────────────────────────────────────
+// ── Canvas Interaction (Pan & Lasso) ──────────────────────────────────────────
 canvasWrapper.addEventListener("mousedown",e=>{
   if(e.target.closest(".node")||e.target.classList.contains("edge")||e.target.closest("#input-bar")||e.target.closest(".suggestion-btn")||e.target.closest(".group-hull")||e.target.closest("#top-bar")||e.target.closest("#zoom-controls"))return;
+  
+  // Lasso logic
+  if(e.shiftKey) {
+    isLassoing=true;
+    const cc=clientToCanvas(e.clientX, e.clientY);
+    lassoStartX=cc.x;
+    lassoStartY=cc.y;
+    lassoBox.style.left=lassoStartX+"px";
+    lassoBox.style.top=lassoStartY+"px";
+    lassoBox.style.width="0px";
+    lassoBox.style.height="0px";
+    lassoBox.style.display="block";
+    return;
+  }
+
   isPanning=true;panMoved=false;panStartX=e.clientX;panStartY=e.clientY;panScrollX=canvasWrapper.scrollLeft;panScrollY=canvasWrapper.scrollTop;canvasWrapper.style.cursor="grabbing";
 });
-canvasWrapper.addEventListener("mousemove",e=>{if(!isPanning)return;const dx=e.clientX-panStartX,dy=e.clientY-panStartY;if(Math.abs(dx)>2||Math.abs(dy)>2)panMoved=true;canvasWrapper.scrollLeft=panScrollX-dx;canvasWrapper.scrollTop=panScrollY-dy;});
-canvasWrapper.addEventListener("mouseup",()=>{if(isPanning&&!panMoved){deselectAll();hasActiveContext=false;}isPanning=false;canvasWrapper.style.cursor="default";});
-canvasWrapper.addEventListener("mouseleave",()=>{isPanning=false;canvasWrapper.style.cursor="default";});
+canvasWrapper.addEventListener("mousemove",e=>{
+  if(isLassoing){
+    const cc=clientToCanvas(e.clientX, e.clientY);
+    const x=Math.min(cc.x, lassoStartX);
+    const y=Math.min(cc.y, lassoStartY);
+    const w=Math.abs(cc.x - lassoStartX);
+    const h=Math.abs(cc.y - lassoStartY);
+    lassoBox.style.left=x+"px";
+    lassoBox.style.top=y+"px";
+    lassoBox.style.width=w+"px";
+    lassoBox.style.height=h+"px";
+    return;
+  }
+  if(!isPanning)return;
+  const dx=e.clientX-panStartX,dy=e.clientY-panStartY;if(Math.abs(dx)>2||Math.abs(dy)>2)panMoved=true;canvasWrapper.scrollLeft=panScrollX-dx;canvasWrapper.scrollTop=panScrollY-dy;
+});
+canvasWrapper.addEventListener("mouseup",e=>{
+  if(isLassoing) {
+    isLassoing=false;
+    lassoBox.style.display="none";
+    const cc=clientToCanvas(e.clientX, e.clientY);
+    const minX=Math.min(cc.x, lassoStartX);
+    const minY=Math.min(cc.y, lassoStartY);
+    const maxX=Math.max(cc.x, lassoStartX);
+    const maxY=Math.max(cc.y, lassoStartY);
+    
+    nodes.forEach(n => {
+      if (n.x >= minX && n.x <= maxX && n.y >= minY && n.y <= maxY) {
+        n.selected=true;
+        const el=getNodeEl(n.id);
+        if(el) el.classList.add("selected");
+      }
+    });
+    hasActiveContext=nodes.some(n=>n.selected);
+    updateSuggestionsDebounced();
+    return;
+  }
 
-function deselectAll(){nodes.forEach(n=>n.selected=false);canvas.querySelectorAll(".node").forEach(el=>el.classList.remove("selected"));updateSuggestionsDebounced();}
+  if(isPanning&&!panMoved){deselectAll();hasActiveContext=false;}
+  isPanning=false;canvasWrapper.style.cursor="default";
+});
+canvasWrapper.addEventListener("mouseleave",()=>{
+  isPanning=false;isLassoing=false;
+  lassoBox.style.display="none";
+  canvasWrapper.style.cursor="default";
+});
+
+function deselectAll(){
+  nodes.forEach(n=>n.selected=false);
+  canvas.querySelectorAll(".node").forEach(el=>el.classList.remove("selected"));
+  updateSuggestionsDebounced();
+  explicitlyDeselected=true; // Important for isolated prompting
+}
 document.addEventListener("click",e=>{
   if(!canvas.contains(e.target)&&!document.getElementById("top-bar").contains(e.target)&&!document.getElementById("input-bar").contains(e.target)&&!suggestionsBar.contains(e.target)&&!colorPickerPopup.contains(e.target)){deselectAll();hasActiveContext=false;}
 });
@@ -1490,7 +1672,7 @@ async function updateSuggestions(){
 // ── Save / Load ───────────────────────────────────────────────────────────────
 function saveGraph(){
   fetch("/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-    nodes:nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{seconds:n.meta.seconds||0,label:n.meta.label||"",title:n.meta.title||""},completed:!!n.completed,groupId:n.groupId})),
+    nodes:nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{topic:n.meta.topic||"",seconds:n.meta.seconds||0,label:n.meta.label||"",title:n.meta.title||""},completed:!!n.completed,groupId:n.groupId})),
     links:links.map(l=>({id:l.id,sourceId:l.sourceId,targetId:l.targetId})),
     groups:groups.map(g=>({id:g.id,name:g.name,color:g.color,nodeIds:[...g.nodeIds],collapsed:!!g.collapsed,collapsedW:g.collapsedW||160,collapsedH:g.collapsedH||60,collapsedX:g.collapsedX,collapsedY:g.collapsedY,savedPositions:g.savedPositions})),
     nextNodeId,nextLinkId,nextGroupId
@@ -1558,6 +1740,7 @@ document.getElementById("study-btn").onclick=async()=>{
 // ── Init ──────────────────────────────────────────────────────────────────────
 initZoom();
 initCanvas();
+loadSettings();
 loadGraph().then(()=>{
   if(nodes.length>0||groups.some(g=>g.collapsed)){
     setTimeout(()=>smartRecenter(false),100);
@@ -1572,7 +1755,7 @@ def index():
     if "user_id" not in session: return redirect("/login")
     return Response(INDEX_HTML, mimetype="text/html")
 
-# ── Groq API Calls (Unchanged) ────────────────────────────────────────────────
+# ── Groq API Calls ────────────────────────────────────────────────────────────
 def call_groq(messages):
     r=requests.post(GROQ_URL,headers={"Authorization":f"Bearer {GROQ_API_KEY}","Content-Type":"application/json"},
                     json={"model":GROQ_MODEL,"messages":messages},timeout=60)
@@ -1625,7 +1808,62 @@ def find_with_groq(query,node_descs):
     except:pass
     return None
 
-# ── App Routes (Updated for PostgreSQL) ───────────────────────────────────────
+# ── App Routes ────────────────────────────────────────────────────────────────
+@app.route("/brainstorm", methods=["POST"])
+def brainstorm():
+    if "user_id" not in session: return jsonify({"error":"unauthorized"}),401
+    d = request.get_json()
+    topic = d.get("topic", "")
+    sys = ('You are a brainstorm assistant. Analyze the topic and return exactly 3 to 4 short, '
+           'highly related subtopics. Return ONLY a valid JSON array of strings. Do not include markdown formatting. '
+           'Example output: ["Subtopic A", "Subtopic B", "Subtopic C"]')
+    try:
+        raw = call_groq([{"role": "system", "content": sys}, {"role": "user", "content": topic}])
+        clean = raw.strip().strip("```json").strip("```").strip()
+        nodes = json.loads(clean)
+        if isinstance(nodes, list):
+            return jsonify({"nodes": nodes})
+    except Exception as e:
+        pass
+    # Fallback if Groq returns invalid JSON
+    return jsonify({"nodes": [f"{topic} idea 1", f"{topic} idea 2", f"{topic} idea 3"]})
+
+@app.route("/save_settings", methods=["POST"])
+def save_settings():
+    if "user_id" not in session: return jsonify({"error": "unauthorized"}), 401
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        uid = session["user_id"]
+        settings_data = json.dumps(request.get_json(), ensure_ascii=False)
+        cursor.execute("SELECT user_id FROM user_settings WHERE user_id=%s", (uid,))
+        if cursor.fetchone():
+            cursor.execute("UPDATE user_settings SET settings=%s WHERE user_id=%s", (settings_data, uid))
+        else:
+            cursor.execute("INSERT INTO user_settings (user_id, settings) VALUES (%s, %s)", (uid, settings_data))
+        conn.commit()
+    except Exception as e:
+        print(e)
+        conn.rollback()
+    finally:
+        cursor.close()
+        conn.close()
+    return jsonify({"ok": True})
+
+@app.route("/load_settings", methods=["GET"])
+def load_settings():
+    if "user_id" not in session: return jsonify({}), 401
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT settings FROM user_settings WHERE user_id=%s", (session["user_id"],))
+        row = cursor.fetchone()
+        if not row: return jsonify({}), 404
+        return jsonify(row['settings'])
+    finally:
+        cursor.close()
+        conn.close()
+
 @app.route("/classify",methods=["POST"])
 def classify():
     if "user_id" not in session:return jsonify({"error":"unauthorized"}),401
