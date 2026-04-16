@@ -9,7 +9,7 @@ import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 # Secure your API key by pulling it from Render's environment!
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -2252,17 +2252,56 @@ loadGraph = async function() {
 // Cursor tracking
 let cursorSyncInterval = null;
 let cursorPollInterval = null;
+let isSyncingGraph = false;
+
+async function syncGraph() {
+  if (isSyncingGraph || draggingNode || draggingGroup || isPanning || isLassoing || resizingNode || resizingGroup || (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA"))) return;
+  isSyncingGraph = true;
+  try {
+    const url = collabOwnerId ? '/load/' + collabOwnerId : '/load';
+    const res = await fetch(url);
+    if (!res.ok) { isSyncingGraph = false; return; }
+    const data = await res.json();
+    if (!data || !data.nodes) { isSyncingGraph = false; return; }
+    
+    const serverNodes = data.nodes || [];
+    const serverLinks = data.links || [];
+    const serverGroups = data.groups || [];
+    
+    if (serverNodes.length !== nodes.length || serverLinks.length !== links.length || serverGroups.length !== groups.length) {
+       canvas.querySelectorAll('.node,.group-hull,.group-label,.group-collapse-btn').forEach(el => el.remove());
+       nodes = serverNodes; links = serverLinks; groups = serverGroups;
+       nextNodeId = data.nextNodeId; nextLinkId = data.nextLinkId; nextGroupId = data.nextGroupId;
+       nodes.forEach(n => { if(!n.meta) n.meta={}; createNodeElement(n); });
+       redrawLinks(); redrawGroups();
+    } else {
+       let changed = false;
+       serverNodes.forEach(sn => {
+          const n = nodes.find(x => x.id === sn.id);
+          if (n && (n.x !== sn.x || n.y !== sn.y || n.text !== sn.text || n.type !== sn.type)) {
+             n.x = sn.x; n.y = sn.y; n.text = sn.text; n.type = sn.type;
+             const el = getNodeEl(n.id);
+             if (el) {
+                el.style.left = n.x + "px"; el.style.top = n.y + "px";
+                if (n.type === "answer") { const b = el.querySelector(".bubble div:last-child"); if (b) b.textContent = n.text; }
+                else if (n.type !== "note" && n.type !== "brainstorm" && n.type !== "timer") { const tw = el.querySelector(".node-text"); if (tw) tw.textContent = n.text; }
+             }
+             changed = true;
+          }
+       });
+       if (changed) { redrawLinks(); redrawGroups(); }
+    }
+  } catch(e) {}
+  isSyncingGraph = false;
+}
 
 function startCursorSync() {
   stopCursorSync();
-  // Send my cursor position every 1s
-  cursorSyncInterval = setInterval(() => {
-    if (!collabOwnerId) return;
-    const cc = { x: canvasWrapper.scrollLeft / currentScale, y: canvasWrapper.scrollTop / currentScale };
-    fetch('/collab/cursor', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({owner_id: collabOwnerId, x: cc.x, y: cc.y}) }).catch(()=>{});
-  }, 1000);
-  // Poll others' cursors every 2s
-  cursorPollInterval = setInterval(() => pollCursors(), 2000);
+  // Poll others' cursors and sync graph rapidly for live syncing
+  cursorPollInterval = setInterval(() => {
+    pollCursors();
+    syncGraph();
+  }, 100);
 }
 
 function stopCursorSync() {
@@ -2304,18 +2343,21 @@ async function pollCursors() {
 canvasWrapper.addEventListener('mousemove', (e) => {
   if (!window._myUserId) return;
   const cc = clientToCanvas(e.clientX, e.clientY);
-  // Throttle to ~5/s
-  if (!canvasWrapper._lastCursorSend || Date.now() - canvasWrapper._lastCursorSend > 200) {
+  // Throttle to ~20/s for live syncing
+  if (!canvasWrapper._lastCursorSend || Date.now() - canvasWrapper._lastCursorSend > 50) {
     canvasWrapper._lastCursorSend = Date.now();
     const ownerId = collabOwnerId || window._myUserId;
     fetch('/collab/cursor', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({owner_id: ownerId, x: cc.x, y: cc.y}) }).catch(()=>{});
   }
 });
 
-// Poll for cursors on my own canvas (to show collaborators to me)
+// Poll for cursors and sync graph on my own canvas (to show collaborators to me)
 setInterval(() => {
-  if (!collabOwnerId && window._myUserId) pollCursors();
-}, 2000);
+  if (!collabOwnerId && window._myUserId) {
+    pollCursors();
+    syncGraph();
+  }
+}, 100);
 
 // Collab label click returns to own canvas
 document.getElementById('collab-label').addEventListener('click', () => {
