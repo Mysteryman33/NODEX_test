@@ -48,6 +48,26 @@ def init_db():
             settings JSONB NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS shares (
+            id SERIAL PRIMARY KEY,
+            owner_id INTEGER NOT NULL,
+            shared_with_id INTEGER NOT NULL,
+            permission TEXT NOT NULL DEFAULT 'view',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner_id, shared_with_id),
+            FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (shared_with_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS collab_cursors (
+            user_id INTEGER NOT NULL,
+            owner_id INTEGER NOT NULL,
+            x FLOAT NOT NULL DEFAULT 0,
+            y FLOAT NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, owner_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+        );
     """)
     conn.commit()
     cursor.close()
@@ -262,7 +282,7 @@ def logout():
 @app.route("/auth/me")
 def me():
     if "user_id" not in session: return jsonify({"authenticated": False})
-    return jsonify({"authenticated": True, "email": session.get("email")})
+    return jsonify({"authenticated": True, "email": session.get("email"), "user_id": session.get("user_id")})
 
 # ── Main app ──────────────────────────────────────────────────────────────────
 INDEX_HTML = r"""<!DOCTYPE html>
@@ -636,6 +656,145 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 }
 .merge-hint{background:var(--surface);border:1px solid var(--border2);color:var(--text);}
 .group-add-hint{background:var(--surface);border:1px solid var(--orange);color:var(--orange);}
+
+/* ── Collaboration ── */
+#collab-bar{
+  position:fixed;top:12px;right:12px;z-index:200;
+  display:flex;gap:6px;align-items:center;
+}
+.collab-btn{
+  background:var(--surface);border:1px solid var(--border2);color:var(--muted2);
+  padding:6px 12px;border-radius:6px;font-family:inherit;font-size:11px;cursor:pointer;
+  transition:all .15s;white-space:nowrap;display:flex;align-items:center;gap:5px;
+}
+.collab-btn:hover{border-color:var(--accent);color:var(--text);}
+.collab-btn.share-btn{background:var(--accent);border-color:var(--accent);color:#fff;}
+.collab-btn.share-btn:hover{background:#6d28d9;}
+.collab-dot{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block;}
+
+/* Share modal */
+#share-modal{
+  position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:3000;
+  display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px);
+}
+#share-modal.visible{display:flex;}
+#share-box{
+  background:var(--surface);border:1px solid var(--border2);border-radius:14px;
+  padding:24px;width:420px;max-width:95vw;display:flex;flex-direction:column;gap:16px;
+  box-shadow:0 0 60px rgba(124,58,237,0.15);max-height:85vh;overflow-y:auto;
+}
+.share-title{font-size:14px;font-weight:bold;color:var(--text);}
+.share-subtitle{font-size:10px;color:var(--muted2);margin-top:-10px;}
+.share-input-row{position:relative;display:flex;gap:6px;flex-direction:column;}
+.share-email-wrap{position:relative;}
+#share-email-input{
+  width:100%;padding:9px 12px;background:var(--surface2);border:1px solid var(--border2);
+  border-radius:8px;color:var(--text);font-family:inherit;font-size:12px;outline:none;
+  transition:border-color .2s;
+}
+#share-email-input:focus{border-color:var(--accent);}
+#share-autocomplete{
+  position:absolute;top:calc(100%+4px);left:0;right:0;
+  background:var(--surface);border:1px solid var(--border2);border-radius:8px;
+  z-index:100;display:none;overflow:hidden;
+  box-shadow:0 8px 24px rgba(0,0,0,.6);
+}
+#share-autocomplete.visible{display:block;}
+.ac-item{padding:9px 12px;font-size:11px;cursor:pointer;color:var(--text);transition:background .1s;}
+.ac-item:hover{background:var(--surface2);}
+.ac-item strong{color:var(--accent);}
+.share-perm-row{display:flex;gap:6px;}
+.perm-btn{
+  flex:1;padding:7px;background:var(--surface2);border:1px solid var(--border2);
+  color:var(--muted2);font-family:inherit;font-size:11px;border-radius:6px;cursor:pointer;transition:all .15s;
+}
+.perm-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+.share-send-btn{
+  background:var(--accent);border:none;color:#fff;padding:9px 16px;border-radius:8px;
+  font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;
+  box-shadow:0 0 16px var(--accent-glow);
+}
+.share-send-btn:hover{background:#6d28d9;}
+.share-msg{font-size:11px;padding:6px 10px;border-radius:6px;display:none;}
+.share-msg.error{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171;}
+.share-msg.success{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);color:#34d399;}
+.share-people-title{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted2);}
+.share-person-row{
+  display:flex;align-items:center;gap:8px;padding:8px 10px;
+  background:var(--surface2);border-radius:8px;border:1px solid var(--border2);
+}
+.share-person-avatar{
+  width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:bold;color:#fff;flex-shrink:0;
+}
+.share-person-email{flex:1;font-size:11px;color:var(--text);}
+.share-person-perm{
+  font-size:10px;padding:3px 8px;border-radius:999px;
+  background:rgba(124,58,237,.15);border:1px solid rgba(124,58,237,.3);color:var(--purple);cursor:pointer;
+}
+.share-person-perm:hover{background:rgba(124,58,237,.25);}
+.share-remove-btn{
+  background:transparent;border:none;color:var(--muted);font-size:14px;cursor:pointer;
+  padding:2px 6px;border-radius:4px;transition:all .15s;
+}
+.share-remove-btn:hover{color:#f87171;background:rgba(239,68,68,.1);}
+.share-close-btn{
+  background:var(--surface2);border:1px solid var(--border2);color:var(--text);
+  font-family:inherit;font-size:11px;padding:7px 14px;border-radius:6px;cursor:pointer;
+  align-self:flex-end;transition:all .15s;
+}
+.share-close-btn:hover{border-color:var(--accent);}
+
+/* Shared-with-me modal */
+#shared-modal{
+  position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:3000;
+  display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px);
+}
+#shared-modal.visible{display:flex;}
+#shared-box{
+  background:var(--surface);border:1px solid var(--border2);border-radius:14px;
+  padding:24px;width:380px;max-width:95vw;display:flex;flex-direction:column;gap:14px;
+  box-shadow:0 0 60px rgba(124,58,237,0.15);max-height:80vh;overflow-y:auto;
+}
+.shared-item{
+  display:flex;align-items:center;gap:10px;padding:10px 12px;
+  background:var(--surface2);border:1px solid var(--border2);border-radius:8px;cursor:pointer;
+  transition:border-color .15s;
+}
+.shared-item:hover{border-color:var(--accent);}
+.shared-item-info{flex:1;}
+.shared-item-email{font-size:12px;color:var(--text);}
+.shared-item-perm{font-size:10px;color:var(--muted2);margin-top:2px;}
+.shared-item-badge{
+  font-size:9px;padding:2px 7px;border-radius:999px;
+  background:rgba(124,58,237,.15);border:1px solid rgba(124,58,237,.3);color:var(--purple);
+}
+
+/* Viewing banner */
+#collab-banner{
+  position:fixed;top:0;left:0;right:0;height:3px;z-index:500;
+  background:linear-gradient(90deg,var(--accent),var(--green));display:none;
+}
+#collab-label{
+  position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:500;
+  font-size:10px;color:var(--muted2);background:var(--surface);
+  border:1px solid var(--border2);padding:3px 10px;border-radius:999px;display:none;
+  letter-spacing:.05em;
+}
+
+/* Remote cursors */
+.remote-cursor{
+  position:absolute;pointer-events:none;z-index:9000;transition:left .1s,top .1s;
+}
+.remote-cursor-dot{
+  width:10px;height:10px;border-radius:50%;border:2px solid white;
+  box-shadow:0 0 6px rgba(0,0,0,.5);
+}
+.remote-cursor-label{
+  font-size:9px;padding:2px 6px;border-radius:999px;color:#fff;
+  white-space:nowrap;margin-top:2px;font-family:'JetBrains Mono',monospace;
+  box-shadow:0 2px 8px rgba(0,0,0,.4);
+}
 </style>
 </head>
 <body>
@@ -649,6 +808,16 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
     <button class="top-btn" id="brainstorm-btn">Brainstorm</button>
     <div class="user-badge" id="user-badge">…</div>
   </div>
+
+  <!-- Collaboration bar (top right) -->
+  <div id="collab-bar">
+    <button class="collab-btn" id="shared-with-me-btn" title="Canvases shared with you">📥 Shared</button>
+    <button class="collab-btn share-btn" id="share-btn">Share</button>
+  </div>
+
+  <!-- Collab viewing banner -->
+  <div id="collab-banner"></div>
+  <div id="collab-label"></div>
   <div id="canvas-wrapper">
     <div id="canvas">
       <div id="lasso-box"></div>
@@ -701,6 +870,39 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
       </select>
     </div>
     <button class="settings-close" id="settings-close-btn">Close</button>
+  </div>
+</div>
+
+<!-- Share Modal -->
+<div id="share-modal">
+  <div id="share-box">
+    <div class="share-title">Share canvas</div>
+    <div class="share-subtitle">Invite people by their Nodex email</div>
+    <div class="share-input-row">
+      <div class="share-email-wrap">
+        <input id="share-email-input" type="email" placeholder="Enter email address…" autocomplete="off"/>
+        <div id="share-autocomplete"></div>
+      </div>
+      <div class="share-perm-row">
+        <button class="perm-btn active" id="perm-view" onclick="setPerm('view')">👁 Can view</button>
+        <button class="perm-btn" id="perm-edit" onclick="setPerm('edit')">✏️ Can edit</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="share-send-btn" onclick="doShareInvite()">Invite</button>
+        <div class="share-msg" id="share-msg"></div>
+      </div>
+    </div>
+    <div id="share-people-list"></div>
+    <button class="share-close-btn" onclick="document.getElementById('share-modal').classList.remove('visible')">Done</button>
+  </div>
+</div>
+
+<!-- Shared-with-me Modal -->
+<div id="shared-modal">
+  <div id="shared-box">
+    <div class="share-title">📥 Shared with you</div>
+    <div id="shared-list-content" style="display:flex;flex-direction:column;gap:8px;"></div>
+    <button class="share-close-btn" onclick="document.getElementById('shared-modal').classList.remove('visible')">Close</button>
   </div>
 </div>
 
@@ -760,11 +962,7 @@ promptEl.addEventListener("input", function() {
 });
 
 // ── User badge ────────────────────────────────────────────────────────────────
-fetch("/auth/me").then(r=>r.json()).then(d=>{
-  const badge=document.getElementById("user-badge");
-  if(d.authenticated){badge.innerHTML=d.email+' · <a href="/auth/logout">Sign out</a>';}
-  else{badge.innerHTML='<a href="/login">Sign in</a>';}
-});
+// (handled by collab section below)
 
 // ── Canvas init ───────────────────────────────────────────────────────────────
 function initCanvas(){
@@ -1805,6 +2003,7 @@ async function loadGraph(){
 // ── Send ──────────────────────────────────────────────────────────────────────
 async function sendPrompt(){
   const raw=promptEl.value.trim();if(!raw)return;
+  if(collabOwnerId && collabPermission!=='edit'){return;}
   hideSlashPopup();
   if(raw.startsWith("/find ")){await runFindCommand(raw.slice(6).trim());promptEl.value="";return;}
   if(raw==="/undo"){undo();promptEl.value="";return;}
@@ -1847,7 +2046,290 @@ document.getElementById("study-btn").onclick=async()=>{
   const d=await r.json();addNode(d.reply||"","answer",spawn.x,spawn.y);redrawLinks();saveGraph();
 };
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── Collaboration ─────────────────────────────────────────────────────────────
+let collabOwnerId = null;       // null = own canvas, number = viewing someone else's
+let collabPermission = 'edit';  // 'view' or 'edit' when viewing shared
+let selectedPerm = 'view';
+const CURSOR_COLORS = ['#f87171','#fb923c','#fbbf24','#34d399','#22d3ee','#a78bfa','#f472b6','#60a5fa'];
+const remoteCursors = {};
+
+function emailToColor(email) {
+  let h = 0;
+  for (let i = 0; i < email.length; i++) h = (h * 31 + email.charCodeAt(i)) & 0xffffffff;
+  return CURSOR_COLORS[Math.abs(h) % CURSOR_COLORS.length];
+}
+function emailInitial(email) { return (email||'?')[0].toUpperCase(); }
+
+function setPerm(p) {
+  selectedPerm = p;
+  document.getElementById('perm-view').classList.toggle('active', p==='view');
+  document.getElementById('perm-edit').classList.toggle('active', p==='edit');
+}
+
+// Autocomplete
+let acTimeout = null;
+document.getElementById('share-email-input').addEventListener('input', function() {
+  const q = this.value.trim();
+  clearTimeout(acTimeout);
+  if (q.length < 2) { closeAC(); return; }
+  acTimeout = setTimeout(() => fetchAC(q), 200);
+});
+document.getElementById('share-email-input').addEventListener('blur', () => setTimeout(closeAC, 150));
+
+async function fetchAC(q) {
+  try {
+    const r = await fetch('/share/lookup?q=' + encodeURIComponent(q));
+    const users = await r.json();
+    const ac = document.getElementById('share-autocomplete');
+    if (!users.length) { closeAC(); return; }
+    ac.innerHTML = '';
+    users.forEach(u => {
+      const d = document.createElement('div');
+      d.className = 'ac-item';
+      const initial = emailInitial(u.email);
+      const color = emailToColor(u.email);
+      d.innerHTML = `<strong style="display:inline-block;width:20px;height:20px;border-radius:50%;background:${color};text-align:center;line-height:20px;font-size:10px;margin-right:8px;font-style:normal">${initial}</strong>${u.email}`;
+      d.onclick = () => { document.getElementById('share-email-input').value = u.email; closeAC(); };
+      ac.appendChild(d);
+    });
+    ac.classList.add('visible');
+  } catch(e) {}
+}
+function closeAC() { document.getElementById('share-autocomplete').classList.remove('visible'); }
+
+async function doShareInvite() {
+  const email = document.getElementById('share-email-input').value.trim();
+  const msg = document.getElementById('share-msg');
+  msg.style.display = 'none';
+  if (!email) return;
+  const r = await fetch('/share/invite', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email, permission: selectedPerm}) });
+  const d = await r.json();
+  if (d.ok) {
+    msg.className = 'share-msg success'; msg.textContent = `Invited ${email} (${selectedPerm})`;
+    msg.style.display = 'block';
+    document.getElementById('share-email-input').value = '';
+    loadSharePeople();
+    setTimeout(() => msg.style.display='none', 3000);
+  } else {
+    msg.className = 'share-msg error'; msg.textContent = d.error || 'Error.';
+    msg.style.display = 'block';
+  }
+}
+
+async function loadSharePeople() {
+  const r = await fetch('/share/list');
+  const people = await r.json();
+  const list = document.getElementById('share-people-list');
+  if (!people.length) { list.innerHTML = '<div style="font-size:11px;color:var(--muted2);">No one added yet.</div>'; return; }
+  list.innerHTML = '<div class="share-people-title" style="margin-bottom:6px;">People with access</div>';
+  people.forEach(p => {
+    const color = emailToColor(p.email);
+    const row = document.createElement('div');
+    row.className = 'share-person-row';
+    row.innerHTML = `
+      <div class="share-person-avatar" style="background:${color}">${emailInitial(p.email)}</div>
+      <div class="share-person-email">${p.email}</div>
+      <span class="share-person-perm" data-uid="${p.uid}" data-perm="${p.permission}">${p.permission==='edit'?'✏️ edit':'👁 view'}</span>
+      <button class="share-remove-btn" data-uid="${p.uid}" title="Remove">✕</button>
+    `;
+    row.querySelector('.share-person-perm').onclick = async function() {
+      const newPerm = this.dataset.perm === 'edit' ? 'view' : 'edit';
+      await fetch('/share/invite', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: p.email, permission: newPerm}) });
+      loadSharePeople();
+    };
+    row.querySelector('.share-remove-btn').onclick = async function() {
+      await fetch('/share/remove', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({uid: p.uid}) });
+      loadSharePeople();
+    };
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('share-btn').onclick = () => {
+  if (collabOwnerId) { alert("You can't share someone else's canvas."); return; }
+  loadSharePeople();
+  document.getElementById('share-modal').classList.add('visible');
+};
+document.getElementById('share-modal').addEventListener('click', e => { if (e.target === document.getElementById('share-modal')) document.getElementById('share-modal').classList.remove('visible'); });
+
+// Shared-with-me
+document.getElementById('shared-with-me-btn').onclick = async () => {
+  const r = await fetch('/share/shared_with_me');
+  const items = await r.json();
+  const content = document.getElementById('shared-list-content');
+  if (!items.length) { content.innerHTML = '<div style="font-size:11px;color:var(--muted2);">Nothing shared with you yet.</div>'; }
+  else {
+    content.innerHTML = '';
+    items.forEach(item => {
+      const color = emailToColor(item.owner_email);
+      const div = document.createElement('div');
+      div.className = 'shared-item';
+      div.innerHTML = `
+        <div class="share-person-avatar" style="background:${color};width:32px;height:32px;font-size:13px">${emailInitial(item.owner_email)}</div>
+        <div class="shared-item-info">
+          <div class="shared-item-email">${item.owner_email}'s canvas</div>
+          <div class="shared-item-perm">${item.permission === 'edit' ? '✏️ Can edit' : '👁 View only'}</div>
+        </div>
+        <span class="shared-item-badge">${item.permission}</span>
+      `;
+      div.onclick = () => openSharedCanvas(item.owner_id, item.owner_email, item.permission);
+      content.appendChild(div);
+    });
+  }
+  document.getElementById('shared-modal').classList.add('visible');
+};
+document.getElementById('shared-modal').addEventListener('click', e => { if (e.target === document.getElementById('shared-modal')) document.getElementById('shared-modal').classList.remove('visible'); });
+
+async function openSharedCanvas(ownerId, ownerEmail, permission) {
+  document.getElementById('shared-modal').classList.remove('visible');
+  collabOwnerId = ownerId;
+  collabPermission = permission;
+  // Clear and reload
+  canvas.querySelectorAll('.node,.group-hull,.group-label,.group-collapse-btn').forEach(el => el.remove());
+  nodes=[]; links=[]; groups=[];
+  await loadGraph();
+  if (nodes.length > 0) setTimeout(() => smartRecenter(false), 100);
+  // Show banner
+  document.getElementById('collab-banner').style.display = 'block';
+  const label = document.getElementById('collab-label');
+  label.style.display = 'block';
+  label.textContent = `Viewing ${ownerEmail}'s canvas · ${permission === 'edit' ? '✏️ edit access' : '👁 view only'}`;
+  // Disable input if view-only
+  if (permission === 'view') {
+    document.getElementById('prompt').disabled = true;
+    document.getElementById('prompt').placeholder = 'View only — you cannot edit this canvas.';
+    document.getElementById('send-btn').disabled = true;
+  }
+  startCursorSync();
+}
+
+function returnToMyCanvas() {
+  collabOwnerId = null; collabPermission = 'edit';
+  document.getElementById('collab-banner').style.display = 'none';
+  document.getElementById('collab-label').style.display = 'none';
+  document.getElementById('prompt').disabled = false;
+  document.getElementById('prompt').placeholder = 'Ask anything. Type / for commands...';
+  document.getElementById('send-btn').disabled = false;
+  canvas.querySelectorAll('.node,.group-hull,.group-label,.group-collapse-btn,.remote-cursor').forEach(el => el.remove());
+  nodes=[]; links=[]; groups=[];
+  loadGraph().then(() => { if (nodes.length > 0) setTimeout(() => smartRecenter(false), 100); });
+  stopCursorSync();
+}
+
+// Patch saveGraph to route to shared owner
+const _origSaveGraph = saveGraph;
+saveGraph = function() {
+  if (collabOwnerId) {
+    if (collabPermission !== 'edit') return;
+    fetch('/save/' + collabOwnerId, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+      nodes: nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{topic:n.meta.topic||'',seconds:n.meta.seconds||0,label:n.meta.label||'',title:n.meta.title||'',w:n.meta.w||null,h:n.meta.h||null},completed:!!n.completed,groupId:n.groupId})),
+      links: links.map(l=>({id:l.id,sourceId:l.sourceId,targetId:l.targetId})),
+      groups: groups.map(g=>({id:g.id,name:g.name,color:g.color,nodeIds:[...g.nodeIds],collapsed:!!g.collapsed,collapsedW:g.collapsedW||160,collapsedH:g.collapsedH||60,collapsedX:g.collapsedX,collapsedY:g.collapsedY,savedPositions:g.savedPositions})),
+      nextNodeId, nextLinkId, nextGroupId
+    }) }).catch(() => {});
+  } else {
+    _origSaveGraph();
+  }
+};
+
+// Patch loadGraph to load from shared owner
+const _origLoadGraph = loadGraph;
+loadGraph = async function() {
+  try {
+    const url = collabOwnerId ? '/load/' + collabOwnerId : '/load';
+    const res = await fetch(url); if (!res.ok) return;
+    const data = await res.json(); if (!data || !data.nodes) return;
+    nodes=data.nodes||[]; links=data.links||[]; groups=data.groups||[];
+    groups.forEach(g=>{if(!g.collapsedW)g.collapsedW=160;if(!g.collapsedH)g.collapsedH=60;});
+    nextNodeId=data.nextNodeId||(Math.max(0,...nodes.map(n=>n.id))+1);
+    nextLinkId=data.nextLinkId||(Math.max(0,...links.map(l=>l.id))+1);
+    nextGroupId=data.nextGroupId||(Math.max(0,...(groups.length?groups.map(g=>g.id):[0]))+1);
+    nodes.forEach(n=>{if(!n.meta)n.meta={};createNodeElement(n);});
+    redrawLinks(); redrawGroups();
+  } catch(e) { console.warn('load failed', e); }
+};
+
+// Cursor tracking
+let cursorSyncInterval = null;
+let cursorPollInterval = null;
+
+function startCursorSync() {
+  stopCursorSync();
+  // Send my cursor position every 1s
+  cursorSyncInterval = setInterval(() => {
+    if (!collabOwnerId) return;
+    const cc = { x: canvasWrapper.scrollLeft / currentScale, y: canvasWrapper.scrollTop / currentScale };
+    fetch('/collab/cursor', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({owner_id: collabOwnerId, x: cc.x, y: cc.y}) }).catch(()=>{});
+  }, 1000);
+  // Poll others' cursors every 2s
+  cursorPollInterval = setInterval(() => pollCursors(), 2000);
+}
+
+function stopCursorSync() {
+  clearInterval(cursorSyncInterval); clearInterval(cursorPollInterval);
+  canvas.querySelectorAll('.remote-cursor').forEach(el => el.remove());
+  Object.keys(remoteCursors).forEach(k => delete remoteCursors[k]);
+}
+
+async function pollCursors() {
+  const ownerId = collabOwnerId || (window._myUserId);
+  if (!ownerId) return;
+  try {
+    const r = await fetch('/collab/cursors/' + ownerId);
+    if (!r.ok) return;
+    const cursors = await r.json();
+    const seen = new Set();
+    cursors.forEach(c => {
+      seen.add(c.uid);
+      if (!remoteCursors[c.uid]) {
+        const el = document.createElement('div');
+        el.className = 'remote-cursor';
+        el.dataset.uid = c.uid;
+        const color = emailToColor(c.email);
+        el.innerHTML = `<div class="remote-cursor-dot" style="background:${color}"></div><div class="remote-cursor-label" style="background:${color}">${c.email.split('@')[0]}</div>`;
+        canvas.appendChild(el);
+        remoteCursors[c.uid] = el;
+      }
+      remoteCursors[c.uid].style.left = c.x + 'px';
+      remoteCursors[c.uid].style.top = c.y + 'px';
+    });
+    // Remove stale
+    Object.keys(remoteCursors).forEach(uid => {
+      if (!seen.has(parseInt(uid))) { remoteCursors[uid].remove(); delete remoteCursors[uid]; }
+    });
+  } catch(e) {}
+}
+
+// Send my cursor when on my own canvas too (so collaborators can see me)
+canvasWrapper.addEventListener('mousemove', (e) => {
+  if (!window._myUserId) return;
+  const cc = clientToCanvas(e.clientX, e.clientY);
+  // Throttle to ~5/s
+  if (!canvasWrapper._lastCursorSend || Date.now() - canvasWrapper._lastCursorSend > 200) {
+    canvasWrapper._lastCursorSend = Date.now();
+    const ownerId = collabOwnerId || window._myUserId;
+    fetch('/collab/cursor', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({owner_id: ownerId, x: cc.x, y: cc.y}) }).catch(()=>{});
+  }
+});
+
+// Poll for cursors on my own canvas (to show collaborators to me)
+setInterval(() => {
+  if (!collabOwnerId && window._myUserId) pollCursors();
+}, 2000);
+
+// Collab label click returns to own canvas
+document.getElementById('collab-label').addEventListener('click', () => {
+  if (collabOwnerId && confirm('Return to your own canvas?')) returnToMyCanvas();
+});
+
+// Store my user id from /auth/me
+fetch('/auth/me').then(r=>r.json()).then(d=>{
+  const badge=document.getElementById('user-badge');
+  if(d.authenticated){
+    badge.innerHTML=d.email+' · <a href="/auth/logout">Sign out</a>';
+    window._myUserId = d.user_id;
+  } else { badge.innerHTML='<a href="/login">Sign in</a>'; }
+});
 initZoom();
 initCanvas();
 loadSettings();
@@ -1864,6 +2346,182 @@ loadGraph().then(()=>{
 def index():
     if "user_id" not in session: return redirect("/login")
     return Response(INDEX_HTML, mimetype="text/html")
+
+# ── Collaboration Routes ───────────────────────────────────────────────────────
+
+@app.route("/share/lookup")
+def share_lookup():
+    """Look up users by partial email for autocomplete (only registered users)."""
+    if "user_id" not in session: return jsonify([]), 401
+    q = request.args.get("q", "").strip().lower()
+    if len(q) < 2: return jsonify([])
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT id, email FROM users WHERE email ILIKE %s AND id != %s LIMIT 5",
+            (f"%{q}%", session["user_id"])
+        )
+        rows = cursor.fetchall()
+        return jsonify([{"id": r["id"], "email": r["email"]} for r in rows])
+    finally:
+        cursor.close(); conn.close()
+
+@app.route("/share/invite", methods=["POST"])
+def share_invite():
+    """Invite a user by email to view/edit your canvas."""
+    if "user_id" not in session: return jsonify({"error": "unauthorized"}), 401
+    d = request.get_json()
+    email = (d.get("email") or "").strip().lower()
+    permission = d.get("permission", "view")
+    if permission not in ("view", "edit"): permission = "view"
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM users WHERE email=%s", (email,))
+        target = cursor.fetchone()
+        if not target: return jsonify({"error": "No user with that email found on Nodex."})
+        if target["id"] == session["user_id"]: return jsonify({"error": "You can't share with yourself."})
+        cursor.execute(
+            "INSERT INTO shares (owner_id, shared_with_id, permission) VALUES (%s,%s,%s) "
+            "ON CONFLICT (owner_id, shared_with_id) DO UPDATE SET permission=%s",
+            (session["user_id"], target["id"], permission, permission)
+        )
+        conn.commit()
+        return jsonify({"ok": True, "email": email, "permission": permission})
+    except Exception as e:
+        conn.rollback(); return jsonify({"error": str(e)})
+    finally:
+        cursor.close(); conn.close()
+
+@app.route("/share/list")
+def share_list():
+    """List people I've shared my canvas with."""
+    if "user_id" not in session: return jsonify([]), 401
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT u.email, s.permission, s.shared_with_id as uid FROM shares s "
+            "JOIN users u ON u.id=s.shared_with_id WHERE s.owner_id=%s ORDER BY s.created_at",
+            (session["user_id"],)
+        )
+        return jsonify([{"email": r["email"], "permission": r["permission"], "uid": r["uid"]} for r in cursor.fetchall()])
+    finally:
+        cursor.close(); conn.close()
+
+@app.route("/share/remove", methods=["POST"])
+def share_remove():
+    """Remove a collaborator."""
+    if "user_id" not in session: return jsonify({"error": "unauthorized"}), 401
+    uid = request.get_json().get("uid")
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM shares WHERE owner_id=%s AND shared_with_id=%s", (session["user_id"], uid))
+        conn.commit()
+        return jsonify({"ok": True})
+    finally:
+        cursor.close(); conn.close()
+
+@app.route("/share/shared_with_me")
+def shared_with_me():
+    """List canvases shared with me."""
+    if "user_id" not in session: return jsonify([]), 401
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT u.email as owner_email, s.owner_id, s.permission FROM shares s "
+            "JOIN users u ON u.id=s.owner_id WHERE s.shared_with_id=%s ORDER BY s.created_at DESC",
+            (session["user_id"],)
+        )
+        return jsonify([{"owner_email": r["owner_email"], "owner_id": r["owner_id"], "permission": r["permission"]} for r in cursor.fetchall()])
+    finally:
+        cursor.close(); conn.close()
+
+@app.route("/load/<int:owner_id>")
+def load_shared(owner_id):
+    """Load someone else's graph if I have permission."""
+    if "user_id" not in session: return jsonify({}), 401
+    uid = session["user_id"]
+    if uid == owner_id:
+        return redirect("/load")
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT permission FROM shares WHERE owner_id=%s AND shared_with_id=%s", (owner_id, uid))
+        share = cursor.fetchone()
+        if not share: return jsonify({"error": "forbidden"}), 403
+        cursor.execute("SELECT data FROM graphs WHERE user_id=%s", (owner_id,))
+        row = cursor.fetchone()
+        if not row: return jsonify({}), 404
+        result = json.loads(row["data"])
+        result["_collab"] = {"owner_id": owner_id, "permission": share["permission"]}
+        return jsonify(result)
+    finally:
+        cursor.close(); conn.close()
+
+@app.route("/save/<int:owner_id>", methods=["POST"])
+def save_shared(owner_id):
+    """Save to someone else's graph if I have edit permission."""
+    if "user_id" not in session: return jsonify({"error": "unauthorized"}), 401
+    uid = session["user_id"]
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT permission FROM shares WHERE owner_id=%s AND shared_with_id=%s", (owner_id, uid))
+        share = cursor.fetchone()
+        if not share or share["permission"] != "edit": return jsonify({"error": "forbidden"}), 403
+        data = json.dumps(request.get_json(), ensure_ascii=False)
+        cursor.execute("SELECT id FROM graphs WHERE user_id=%s", (owner_id,))
+        if cursor.fetchone():
+            cursor.execute("UPDATE graphs SET data=%s, updated_at=CURRENT_TIMESTAMP WHERE user_id=%s", (data, owner_id))
+        else:
+            cursor.execute("INSERT INTO graphs (user_id, data) VALUES (%s,%s)", (owner_id, data))
+        conn.commit()
+        return jsonify({"ok": True})
+    except Exception as e:
+        conn.rollback(); return jsonify({"error": str(e)})
+    finally:
+        cursor.close(); conn.close()
+
+@app.route("/collab/cursor", methods=["POST"])
+def update_cursor():
+    """Update my cursor position on an owner's canvas."""
+    if "user_id" not in session: return jsonify({}), 401
+    d = request.get_json()
+    owner_id = d.get("owner_id", session["user_id"])
+    x, y = d.get("x", 0), d.get("y", 0)
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO collab_cursors (user_id, owner_id, x, y, updated_at) VALUES (%s,%s,%s,%s,NOW()) "
+            "ON CONFLICT (user_id, owner_id) DO UPDATE SET x=%s, y=%s, updated_at=NOW()",
+            (session["user_id"], owner_id, x, y, x, y)
+        )
+        conn.commit()
+        return jsonify({"ok": True})
+    finally:
+        cursor.close(); conn.close()
+
+@app.route("/collab/cursors/<int:owner_id>")
+def get_cursors(owner_id):
+    """Get all active cursors on owner's canvas (active = updated in last 10s)."""
+    if "user_id" not in session: return jsonify([]), 401
+    uid = session["user_id"]
+    # Must be the owner or have share access
+    if uid != owner_id:
+        conn = get_db(); cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT 1 FROM shares WHERE owner_id=%s AND shared_with_id=%s", (owner_id, uid))
+            if not cursor.fetchone(): return jsonify([]), 403
+        finally:
+            cursor.close(); conn.close()
+    conn = get_db(); cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT c.user_id, u.email, c.x, c.y FROM collab_cursors c "
+            "JOIN users u ON u.id=c.user_id "
+            "WHERE c.owner_id=%s AND c.user_id!=%s AND c.updated_at > NOW()-INTERVAL '10 seconds'",
+            (owner_id, uid)
+        )
+        return jsonify([{"uid": r["user_id"], "email": r["email"], "x": r["x"], "y": r["y"]} for r in cursor.fetchall()])
+    finally:
+        cursor.close(); conn.close()
 
 # ── Groq API Calls ────────────────────────────────────────────────────────────
 def call_groq(messages):
