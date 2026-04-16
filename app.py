@@ -7,6 +7,7 @@ from functools import wraps
 from flask import Flask, request, jsonify, Response, session, redirect, url_for, g
 import requests
 import psycopg2
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from psycopg2.pool import ThreadedConnectionPool
 from psycopg2.extras import RealDictCursor
 
@@ -19,6 +20,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
 app.permanent_session_lifetime = timedelta(days=30)
+socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
 # ── DB (Updated for PostgreSQL with Connection Pooling) ─────────────
 db_pool = None
@@ -328,6 +330,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <title>SecondBrain</title>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap');
 :root{
@@ -2017,7 +2020,9 @@ function saveGraph(){
     links:links.map(l=>({id:l.id,sourceId:l.sourceId,targetId:l.targetId})),
     groups:groups.map(g=>({id:g.id,name:g.name,color:g.color,nodeIds:[...g.nodeIds],collapsed:!!g.collapsed,collapsedW:g.collapsedW||160,collapsedH:g.collapsedH||60,collapsedX:g.collapsedX,collapsedY:g.collapsedY,savedPositions:g.savedPositions})),
     nextNodeId,nextLinkId,nextGroupId
-  })}).catch(()=>{});
+  })})
+  .then(() => { if (window._myUserId && typeof socket !== 'undefined') socket.emit('graph_update', {owner_id: window._myUserId}); })
+  .catch(()=>{});
 }
 async function loadGraph(){
   try{
@@ -2259,7 +2264,9 @@ saveGraph = function() {
       links: links.map(l=>({id:l.id,sourceId:l.sourceId,targetId:l.targetId})),
       groups: groups.map(g=>({id:g.id,name:g.name,color:g.color,nodeIds:[...g.nodeIds],collapsed:!!g.collapsed,collapsedW:g.collapsedW||160,collapsedH:g.collapsedH||60,collapsedX:g.collapsedX,collapsedY:g.collapsedY,savedPositions:g.savedPositions})),
       nextNodeId, nextLinkId, nextGroupId
-    }) }).catch(() => {});
+    }) })
+    .then(() => { if (typeof socket !== 'undefined') socket.emit('graph_update', {owner_id: collabOwnerId}); })
+    .catch(() => {});
   } else {
     _origSaveGraph();
   }
@@ -2328,32 +2335,10 @@ async function syncGraph() {
   isSyncingGraph = false;
 }
 
-function startCursorSync() {
-  stopCursorSync();
-  // Poll others' cursors and sync graph rapidly for live syncing
-  cursorPollInterval = setInterval(() => {
-    pollCursors();
-    syncGraph();
-  }, 100);
-}
+let socket = io();
 
-function stopCursorSync() {
-  clearInterval(cursorSyncInterval); clearInterval(cursorPollInterval);
-  canvas.querySelectorAll('.remote-cursor').forEach(el => el.remove());
-  Object.keys(remoteCursors).forEach(k => delete remoteCursors[k]);
-}
-
-async function pollCursors() {
-  const ownerId = collabOwnerId || (window._myUserId);
-  if (!ownerId) return;
-  try {
-    const r = await fetch('/collab/cursors/' + ownerId);
-    if (!r.ok) return;
-    const cursors = await r.json();
-    const seen = new Set();
-    cursors.forEach(c => {
-      seen.add(c.uid);
-      if (!remoteCursors[c.uid]) {
+socket.on('cursor_moved', (c) => {
+    if (!remoteCursors[c.uid]) {
         const el = document.createElement('div');
         el.className = 'remote-cursor';
         el.dataset.uid = c.uid;
@@ -2361,36 +2346,49 @@ async function pollCursors() {
         el.innerHTML = `<div class="remote-cursor-dot" style="background:${color}"></div><div class="remote-cursor-label" style="background:${color}">${c.email.split('@')[0]}</div>`;
         canvas.appendChild(el);
         remoteCursors[c.uid] = el;
-      }
-      remoteCursors[c.uid].style.left = c.x + 'px';
-      remoteCursors[c.uid].style.top = c.y + 'px';
-    });
-    // Remove stale
-    Object.keys(remoteCursors).forEach(uid => {
-      if (!seen.has(parseInt(uid))) { remoteCursors[uid].remove(); delete remoteCursors[uid]; }
-    });
-  } catch(e) {}
+    }
+    remoteCursors[c.uid].style.left = c.x + 'px';
+    remoteCursors[c.uid].style.top = c.y + 'px';
+    
+    clearTimeout(remoteCursors[c.uid].timeout);
+    remoteCursors[c.uid].timeout = setTimeout(() => {
+        if (remoteCursors[c.uid]) {
+            remoteCursors[c.uid].remove();
+            delete remoteCursors[c.uid];
+        }
+    }, 5000);
+});
+
+socket.on('graph_updated', () => {
+    syncGraph();
+});
+
+function startCursorSync() {
+  stopCursorSync();
+  if (collabOwnerId) socket.emit('join_canvas', {owner_id: collabOwnerId});
 }
 
-// Send my cursor when on my own canvas too (so collaborators can see me)
+function stopCursorSync() {
+  if (collabOwnerId) socket.emit('leave_canvas', {owner_id: collabOwnerId});
+  canvas.querySelectorAll('.remote-cursor').forEach(el => el.remove());
+  Object.keys(remoteCursors).forEach(k => delete remoteCursors[k]);
+}
+
 canvasWrapper.addEventListener('mousemove', (e) => {
   if (!window._myUserId) return;
   const cc = clientToCanvas(e.clientX, e.clientY);
-  // Throttle to ~20/s for live syncing
   if (!canvasWrapper._lastCursorSend || Date.now() - canvasWrapper._lastCursorSend > 50) {
     canvasWrapper._lastCursorSend = Date.now();
     const ownerId = collabOwnerId || window._myUserId;
-    fetch('/collab/cursor', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({owner_id: ownerId, x: cc.x, y: cc.y}) }).catch(()=>{});
+    socket.emit('cursor_move', {
+        owner_id: ownerId,
+        uid: window._myUserId,
+        email: window._myEmail,
+        x: cc.x,
+        y: cc.y
+    });
   }
 });
-
-// Poll for cursors and sync graph on my own canvas (to show collaborators to me)
-setInterval(() => {
-  if (!collabOwnerId && window._myUserId) {
-    pollCursors();
-    syncGraph();
-  }
-}, 100);
 
 // Collab label click returns to own canvas
 document.getElementById('collab-label').addEventListener('click', () => {
@@ -2403,6 +2401,8 @@ fetch('/auth/me').then(r=>r.json()).then(d=>{
   if(d.authenticated){
     badge.innerHTML=d.email+' · <a href="/auth/logout">Sign out</a>';
     window._myUserId = d.user_id;
+    window._myEmail = d.email;
+    socket.emit('join_canvas', {owner_id: d.user_id});
   } else { badge.innerHTML='<a href="/login">Sign in</a>'; }
 });
 initZoom();
@@ -2554,49 +2554,32 @@ def save_shared(owner_id):
     finally:
         cursor.close(); conn.close()
 
-@app.route("/collab/cursor", methods=["POST"])
-def update_cursor():
-    """Update my cursor position on an owner's canvas."""
-    if "user_id" not in session: return jsonify({}), 401
-    d = request.get_json()
-    owner_id = d.get("owner_id", session["user_id"])
-    x, y = d.get("x", 0), d.get("y", 0)
-    conn = get_db(); cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "INSERT INTO collab_cursors (user_id, owner_id, x, y, updated_at) VALUES (%s,%s,%s,%s,NOW()) "
-            "ON CONFLICT (user_id, owner_id) DO UPDATE SET x=EXCLUDED.x, y=EXCLUDED.y, updated_at=NOW()",
-            (session["user_id"], owner_id, x, y)
-        )
-        conn.commit()
-        return jsonify({"ok": True})
-    finally:
-        cursor.close(); conn.close()
+# ── Socket.IO Real-time Collaboration ─────────────────────────────────────────
 
-@app.route("/collab/cursors/<int:owner_id>")
-def get_cursors(owner_id):
-    """Get all active cursors on owner's canvas (active = updated in last 10s)."""
-    if "user_id" not in session: return jsonify([]), 401
-    uid = session["user_id"]
-    # Must be the owner or have share access
-    if uid != owner_id:
-        conn = get_db(); cursor = conn.cursor()
-        try:
-            cursor.execute("SELECT 1 FROM shares WHERE owner_id=%s AND shared_with_id=%s", (owner_id, uid))
-            if not cursor.fetchone(): return jsonify([]), 403
-        finally:
-            cursor.close(); conn.close()
-    conn = get_db(); cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "SELECT c.user_id, u.email, c.x, c.y FROM collab_cursors c "
-            "JOIN users u ON u.id=c.user_id "
-            "WHERE c.owner_id=%s AND c.user_id!=%s AND c.updated_at > NOW()-INTERVAL '10 seconds'",
-            (owner_id, uid)
-        )
-        return jsonify([{"uid": r["user_id"], "email": r["email"], "x": r["x"], "y": r["y"]} for r in cursor.fetchall()])
-    finally:
-        cursor.close(); conn.close()
+@socketio.on('join_canvas')
+def on_join_canvas(data):
+    owner_id = data.get('owner_id')
+    if owner_id:
+        join_room(f"canvas_{owner_id}")
+
+@socketio.on('leave_canvas')
+def on_leave_canvas(data):
+    owner_id = data.get('owner_id')
+    if owner_id:
+        leave_room(f"canvas_{owner_id}")
+
+@socketio.on('cursor_move')
+def on_cursor_move(data):
+    # data: {owner_id, uid, email, x, y}
+    owner_id = data.get('owner_id')
+    if owner_id:
+        emit('cursor_moved', data, room=f"canvas_{owner_id}", include_self=False)
+
+@socketio.on('graph_update')
+def on_graph_update(data):
+    owner_id = data.get('owner_id')
+    if owner_id:
+        emit('graph_updated', data, room=f"canvas_{owner_id}", include_self=False)
 
 # ── Groq API Calls ────────────────────────────────────────────────────────────
 def call_groq(messages):
