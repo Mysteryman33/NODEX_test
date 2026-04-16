@@ -4,7 +4,7 @@ import secrets
 import hashlib
 from datetime import datetime, timedelta
 from functools import wraps
-from flask import Flask, request, jsonify, Response, session, redirect, url_for
+from flask import Flask, request, jsonify, Response, session, redirect, url_for, g
 import requests
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
@@ -45,9 +45,21 @@ class PooledDB:
             self.conn = None
 
 def get_db():
-    if db_pool:
-        return PooledDB()
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    if 'db_wrapper' not in g:
+        if db_pool:
+            g.db_wrapper = PooledDB()
+        else:
+            g.db_wrapper = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    return g.db_wrapper
+
+@app.teardown_appcontext
+def close_db(e=None):
+    wrapper = g.pop('db_wrapper', None)
+    if wrapper is not None:
+        try:
+            wrapper.close()
+        except Exception:
+            pass
 
 def init_db():
     if not DATABASE_URL:
@@ -1993,14 +2005,9 @@ async function classifyInput(text){
 }
 
 // ── Suggestions ───────────────────────────────────────────────────────────────
-function renderSuggestions(list){suggestionsBar.innerHTML="";if(!list||!list.length)return;list.slice(0,3).forEach(s=>{const btn=document.createElement("button");btn.className="suggestion-btn";btn.textContent=s;btn.onclick=()=>{promptEl.value=s;promptEl.focus();updateSuggestionsDebounced();};suggestionsBar.appendChild(btn);});}
-let suggestTimeout=null;
-function updateSuggestionsDebounced(){if(suggestTimeout)clearTimeout(suggestTimeout);suggestTimeout=setTimeout(updateSuggestions,400);}
-async function updateSuggestions(){
-  const raw=promptEl.value.trim();if(raw.startsWith("/"))return;
-  const ctx=buildContext();if(!raw&&!ctx){suggestionsBar.innerHTML="";return;}
-  try{const r=await fetch("/suggest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:raw||"(thinking)",context:ctx})});const d=await r.json();renderSuggestions(d.suggestions||[]);}catch(e){}
-}
+function renderSuggestions(list) { suggestionsBar.innerHTML = ""; }
+function updateSuggestionsDebounced() {}
+async function updateSuggestions() {}
 
 // ── Save / Load ───────────────────────────────────────────────────────────────
 function saveGraph(){
@@ -2449,8 +2456,8 @@ def share_invite():
         if target["id"] == session["user_id"]: return jsonify({"error": "You can't share with yourself."})
         cursor.execute(
             "INSERT INTO shares (owner_id, shared_with_id, permission) VALUES (%s,%s,%s) "
-            "ON CONFLICT (owner_id, shared_with_id) DO UPDATE SET permission=%s",
-            (session["user_id"], target["id"], permission, permission)
+            "ON CONFLICT (owner_id, shared_with_id) DO UPDATE SET permission=EXCLUDED.permission",
+            (session["user_id"], target["id"], permission)
         )
         conn.commit()
         return jsonify({"ok": True, "email": email, "permission": permission})
@@ -2557,8 +2564,8 @@ def update_cursor():
     try:
         cursor.execute(
             "INSERT INTO collab_cursors (user_id, owner_id, x, y, updated_at) VALUES (%s,%s,%s,%s,NOW()) "
-            "ON CONFLICT (user_id, owner_id) DO UPDATE SET x=%s, y=%s, updated_at=NOW()",
-            (session["user_id"], owner_id, x, y, x, y)
+            "ON CONFLICT (user_id, owner_id) DO UPDATE SET x=EXCLUDED.x, y=EXCLUDED.y, updated_at=NOW()",
+            (session["user_id"], owner_id, x, y)
         )
         conn.commit()
         return jsonify({"ok": True})
