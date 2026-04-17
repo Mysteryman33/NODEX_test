@@ -45,6 +45,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS graphs (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
+            title TEXT DEFAULT 'Untitled Canvas',
             data TEXT NOT NULL,
             share_id TEXT UNIQUE,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -68,9 +69,12 @@ def init_db():
     try:
         cursor.execute("ALTER TABLE graphs ADD COLUMN share_id TEXT UNIQUE;")
         conn.commit()
-    except psycopg2.errors.DuplicateColumn:
+    except:
         conn.rollback()
-    except Exception:
+    try:
+        cursor.execute("ALTER TABLE graphs ADD COLUMN title TEXT DEFAULT 'Untitled Canvas';")
+        conn.commit()
+    except:
         conn.rollback()
     cursor.close()
     conn.close()
@@ -304,6 +308,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap');
 :root{
+  --ui-scale: 1.0;
+  
+  /* Midnight Theme Base */
   --bg:#000000;
   --canvas-bg:#000000;
   --surface:#080810;
@@ -352,9 +359,22 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   position:fixed;top:12px;left:12px;z-index:200;
   display:flex;gap:6px;align-items:center;
 }
+
+.board-title-input {
+  background: transparent; border: none; color: var(--text);
+  font-family: inherit; font-weight: bold; font-size: calc(14px * var(--ui-scale));
+  outline: none; padding: calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  border-radius: 6px; transition: background 0.2s, box-shadow 0.2s;
+  min-width: 150px; max-width: 300px;
+}
+.board-title-input:hover, .board-title-input:focus {
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--border2);
+}
+
 .user-badge{
-  font-size:10px;color:var(--muted2);
-  padding:5px 10px;border:1px solid var(--border2);border-radius:6px;
+  font-size:calc(10px * var(--ui-scale));color:var(--muted2);
+  padding:calc(5px * var(--ui-scale)) calc(10px * var(--ui-scale));
+  border:1px solid var(--border2);border-radius:6px;
   background:var(--surface);letter-spacing:.05em;
 }
 .user-badge a{color:var(--accent);text-decoration:none;}
@@ -368,8 +388,8 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 #canvas{
   position:absolute;top:0;left:0;
   background-image:
-    linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+    linear-gradient(rgba(150,150,150,0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(150,150,150,0.06) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 #link-layer{position:absolute;inset:0;pointer-events:auto;}
@@ -529,10 +549,12 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   font-size: 18px; font-weight: bold; flex-shrink: 0; margin-bottom: 2px;
 }
 #send-btn:hover { transform: scale(1.05); background: var(--accent); color: white; box-shadow: 0 0 15px var(--accent-glow); }
+
 .top-btn{
   background:var(--surface);border:1px solid var(--border2);color:var(--muted2);
-  padding:6px 12px;border-radius:6px;font-family:inherit;font-size:11px;cursor:pointer;
-  transition:all .15s;white-space:nowrap;
+  padding:calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  border-radius:6px;font-family:inherit;font-size:calc(11px * var(--ui-scale));
+  cursor:pointer; transition:all .15s;white-space:nowrap;
 }
 .top-btn:hover{border-color:var(--accent);color:var(--text);}
 
@@ -605,7 +627,9 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 }
 .modal-close, .modal-btn{
   background:var(--surface2);border:1px solid var(--border2);color:var(--text);
-  font-family:inherit;font-size:11px;padding:8px 12px;border-radius:6px;cursor:pointer;
+  font-family:inherit;font-size:calc(11px * var(--ui-scale));
+  padding:calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  border-radius:6px;cursor:pointer;
   transition:all .15s; align-self: flex-end; font-weight: bold;
 }
 .modal-close:hover{border-color:var(--accent);}
@@ -614,12 +638,15 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 .share-input-wrap { display: flex; gap: 8px; align-items: center; }
 .collab-list { max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.collab-item { font-size: 11px; padding: 6px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border2); display: flex; justify-content: space-between; }
-.dash-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.collab-item { font-size: 11px; padding: 6px 10px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border2); display: flex; justify-content: space-between; align-items: center; }
+.remove-collab-btn { background: transparent; border: none; color: #ef4444; font-weight: bold; cursor: pointer; padding: 4px; border-radius: 4px;}
+.remove-collab-btn:hover { background: rgba(239,68,68,0.2); }
+
+.dash-list { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .dash-item { font-size: 11px; padding: 12px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border2); cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center; }
 .dash-item:hover { border-color: var(--accent); background: rgba(124,58,237,0.05); }
 
-/* Share & Presence (Canva Style) */
+/* Share & Presence */
 #share-btn {
   background: var(--accent); color: white; font-weight: bold; border: none;
   box-shadow: 0 0 10px var(--accent-glow); margin-left: auto;
@@ -649,17 +676,20 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 <body>
 <div id="app">
   <div id="top-bar">
-    <button class="top-btn" id="dash-btn" title="Dashboard">🏠 Canvas Hub</button>
-    <button class="top-btn" id="settings-btn">⚙</button>
+    <button class="top-btn" id="dash-btn" title="Dashboard">🏠 Dashboard</button>
     <div style="width: 1px; height: 16px; background: var(--border2); margin: 0 4px;"></div>
+    <input type="text" id="board-title-input" class="board-title-input" value="Untitled Canvas" />
+    <div style="width: 1px; height: 16px; background: var(--border2); margin: 0 4px;"></div>
+    
     <button class="top-btn" id="study-btn">Study</button>
-    <button class="top-btn" id="auto-btn">Auto</button>
-    <button class="top-btn" id="group-btn">Group</button>
-    <button class="top-btn" id="note-btn">Note</button>
+    <button class="top-btn" id="auto-btn">Auto Layout</button>
+    <button class="top-btn" id="group-btn">Group Nodes</button>
+    <button class="top-btn" id="note-btn">Add Note</button>
     <button class="top-btn" id="brainstorm-btn">Brainstorm</button>
+    <button class="top-btn" id="settings-btn" title="Settings">⚙ Settings</button>
     
     <div id="presence-bar"></div>
-    <button class="top-btn" id="share-btn">Share</button>
+    <button class="top-btn" id="share-btn">Share Canvas</button>
     <div class="user-badge" id="user-badge">…</div>
   </div>
   <div id="canvas-wrapper">
@@ -702,7 +732,26 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 <div id="settings-modal" class="modal-overlay">
   <div class="modal-box">
-    <div class="modal-title">Settings</div>
+    <div class="modal-title">Settings & Customization</div>
+    
+    <div class="settings-row">
+      <div class="settings-label">Color Theme</div>
+      <select class="settings-select" id="theme-select">
+        <option value="midnight" selected>Midnight (Dark)</option>
+        <option value="nord">Nord (Cool Dark)</option>
+        <option value="light">Light Mode</option>
+      </select>
+    </div>
+    
+    <div class="settings-row">
+      <div class="settings-label">UI Scale</div>
+      <select class="settings-select" id="ui-scale-select">
+        <option value="0.85">Small</option>
+        <option value="1.0" selected>Normal</option>
+        <option value="1.15">Large</option>
+      </select>
+    </div>
+    
     <div class="settings-row">
       <div class="settings-label">Zoom Speed</div>
       <select class="settings-select" id="zoom-speed-select">
@@ -713,7 +762,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
         <option value="0.2">Very Fast</option>
       </select>
     </div>
-    <button class="modal-close" id="settings-close-btn">Close</button>
+    <button class="modal-close" id="settings-close-btn">Done</button>
   </div>
 </div>
 
@@ -721,23 +770,23 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   <div class="modal-box">
     <div class="modal-title">Share Canvas</div>
     <div class="settings-row">
-      <div class="settings-label">Add people by email</div>
+      <div class="settings-label">Share via link</div>
+      <div class="share-input-wrap">
+        <input type="text" id="share-link-input" class="modal-input" readonly/>
+        <button class="modal-btn primary" id="share-copy-btn">Copy</button>
+      </div>
+    </div>
+    <div style="height: 1px; background: var(--border2); margin: 8px 0;"></div>
+    <div class="settings-row">
+      <div class="settings-label">Add Collaborators (By Email)</div>
       <div class="share-input-wrap">
         <input type="email" id="invite-email" class="modal-input" placeholder="collab@example.com"/>
         <button class="modal-btn primary" id="invite-btn">Invite</button>
       </div>
     </div>
     <div class="settings-row" id="collab-wrap" style="display:none;">
-      <div class="settings-label">Collaborators</div>
+      <div class="settings-label">Active Collaborators</div>
       <div class="collab-list" id="collab-list"></div>
-    </div>
-    <div style="height: 1px; background: var(--border2); margin: 8px 0;"></div>
-    <div class="settings-row">
-      <div class="settings-label">Or share via link</div>
-      <div class="share-input-wrap">
-        <input type="text" id="share-link-input" class="modal-input" readonly/>
-        <button class="modal-btn" id="share-copy-btn">Copy</button>
-      </div>
     </div>
     <button class="modal-close" onclick="document.getElementById('share-modal').classList.remove('visible')">Done</button>
   </div>
@@ -745,28 +794,36 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 <div id="dash-modal" class="modal-overlay">
   <div class="modal-box" style="width: 500px; max-width: 90vw;">
-    <div class="modal-title">Canvas Hub</div>
+    <div class="modal-title">Canvas Dashboard</div>
+    
     <div class="settings-row">
-      <div class="settings-label">Your Canvas</div>
-      <div class="dash-item" onclick="window.location.href='/'">
-        <span>Personal Graph</span>
-        <span style="color: var(--accent);">Go →</span>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+         <div class="settings-label">My Canvases</div>
+         <button class="modal-btn primary" id="new-canvas-btn" style="padding:6px 12px; font-size: 11px;">+ New Canvas</button>
       </div>
+      <div class="dash-list" id="my-dash-list">Loading...</div>
     </div>
+    
     <div style="height: 1px; background: var(--border2); margin: 8px 0;"></div>
+    
     <div class="settings-row">
       <div class="settings-label">Shared with You</div>
-      <div class="dash-list" id="dash-list">Loading...</div>
+      <div class="dash-list" id="shared-dash-list">Loading...</div>
     </div>
     <button class="modal-close" onclick="document.getElementById('dash-modal').classList.remove('visible')">Close</button>
   </div>
 </div>
 
 <script>
-const IS_SHARED = false;
-let socket = null;
+// Injection points from Flask
+const IS_SHARED = true; // Every canvas is inherently collaborative and shareable now
+const SHARE_ID = '$$SHARE_ID$$';
+const IS_OWNER = $$IS_OWNER$$;
+const BOARD_TITLE = '$$BOARD_TITLE$$';
+
+let socket = io();
 const remoteCursors = {};
-const userLastPositions = {}; // For jumping to users
+const userLastPositions = {};
 let currentUserEmail = "";
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -806,6 +863,12 @@ const SLASH_COMMANDS=[
   {cmd:"/redo",   desc:"Redo last undone action",            argHint:"/redo"},
 ];
 
+const THEMES = {
+  midnight: { bg:"#000000", canvas:"#000000", surface:"#080810", surface2:"#0d0d1a", border:"#141428", border2:"#1e1e3a", text:"#e8e8f0", muted:"#4a4a6a", muted2:"#6a6a8a" },
+  nord: { bg:"#2E3440", canvas:"#2E3440", surface:"#3B4252", surface2:"#434C5E", border:"#4C566A", border2:"#4C566A", text:"#ECEFF4", muted:"#D8DEE9", muted2:"#E5E9F0" },
+  light: { bg:"#f8f9fa", canvas:"#e9ecef", surface:"#ffffff", surface2:"#f8f9fa", border:"#dee2e6", border2:"#ced4da", text:"#212529", muted:"#6c757d", muted2:"#495057" }
+};
+
 // ── DOM ───────────────────────────────────────────────────────────────────────
 const canvasWrapper=document.getElementById("canvas-wrapper");
 const canvas=document.getElementById("canvas");
@@ -822,6 +885,25 @@ promptEl.addEventListener("input", function() {
   this.style.height = (this.scrollHeight) + "px";
 });
 
+// ── Board Title & Owner Controls ──────────────────────────────────────────────
+const titleInput = document.getElementById("board-title-input");
+titleInput.value = BOARD_TITLE;
+titleInput.addEventListener("change", async () => {
+  if (!IS_OWNER) {
+      alert("Only the owner can rename the canvas.");
+      titleInput.value = BOARD_TITLE;
+      return;
+  }
+  const newTitle = titleInput.value.trim() || "Untitled Canvas";
+  try {
+      await fetch("/api/board/title", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ share_id: SHARE_ID, title: newTitle })
+      });
+      socket.emit("title_update", { room: SHARE_ID, title: newTitle });
+  } catch(e) {}
+});
+
 // ── User badge ────────────────────────────────────────────────────────────────
 fetch("/auth/me").then(r=>r.json()).then(d=>{
   const badge=document.getElementById("user-badge");
@@ -832,6 +914,56 @@ fetch("/auth/me").then(r=>r.json()).then(d=>{
     badge.innerHTML='<a href="/login">Sign in</a>';
   }
 });
+
+// ── Settings, Customization & Themes ──────────────────────────────────────────
+function applyTheme(name) {
+  const t = THEMES[name] || THEMES.midnight;
+  const r = document.documentElement;
+  r.style.setProperty('--bg', t.bg);
+  r.style.setProperty('--canvas-bg', t.canvas);
+  r.style.setProperty('--surface', t.surface);
+  r.style.setProperty('--surface2', t.surface2);
+  r.style.setProperty('--border', t.border);
+  r.style.setProperty('--border2', t.border2);
+  r.style.setProperty('--text', t.text);
+  r.style.setProperty('--muted', t.muted);
+  r.style.setProperty('--muted2', t.muted2);
+}
+
+function applyUiScale(scale) {
+  document.documentElement.style.setProperty('--ui-scale', scale);
+}
+
+document.getElementById("settings-btn").onclick=()=>document.getElementById("settings-modal").classList.add("visible");
+document.getElementById("settings-close-btn").onclick=()=>{ document.getElementById("settings-modal").classList.remove("visible"); saveSettings(); };
+document.querySelectorAll(".modal-overlay").forEach(m => m.addEventListener("click", e => {
+  if(e.target===m) { m.classList.remove("visible"); if(m.id==="settings-modal") saveSettings(); }
+}));
+
+document.getElementById("theme-select").addEventListener("change", e => applyTheme(e.target.value));
+document.getElementById("ui-scale-select").addEventListener("change", e => applyUiScale(e.target.value));
+
+async function saveSettings() {
+  const settings = { 
+    zoomSpeed: document.getElementById("zoom-speed-select").value,
+    theme: document.getElementById("theme-select").value,
+    uiScale: document.getElementById("ui-scale-select").value
+  };
+  SCALE_STEP = parseFloat(settings.zoomSpeed);
+  try { await fetch("/save_settings", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(settings) }); } catch(e){}
+}
+
+async function loadSettings() {
+  try {
+    const r = await fetch("/load_settings");
+    if(r.ok) { 
+        const data = await r.json(); 
+        if(data.zoomSpeed) { document.getElementById("zoom-speed-select").value = data.zoomSpeed; SCALE_STEP = parseFloat(data.zoomSpeed); } 
+        if(data.theme) { document.getElementById("theme-select").value = data.theme; applyTheme(data.theme); }
+        if(data.uiScale) { document.getElementById("ui-scale-select").value = data.uiScale; applyUiScale(data.uiScale); }
+    }
+  } catch(e){}
+}
 
 // ── Canvas init & Zoom ────────────────────────────────────────────────────────
 function initCanvas(){
@@ -881,7 +1013,6 @@ function initZoom(){
 
 document.getElementById("zoom-in-btn").onclick=()=>applyZoom(currentScale+SCALE_STEP);
 document.getElementById("zoom-out-btn").onclick=()=>applyZoom(currentScale-SCALE_STEP);
-document.getElementById("zoom-speed-select").addEventListener("change",function(){ SCALE_STEP=parseFloat(this.value); saveSettings(); });
 canvasWrapper.addEventListener("wheel",e=>{
   if(e.ctrlKey||e.metaKey){
     e.preventDefault();
@@ -957,24 +1088,6 @@ const getNodeEl=id=>canvas.querySelector('.node[data-id="'+id+'"]');
 const getGroupEl=id=>canvas.querySelector('.group-hull[data-gid="'+id+'"]');
 const getSelectedNodes=()=>nodes.filter(n=>n.selected);
 function applyDimClass(el,dim){for(let i=0;i<=4;i++)el.classList.remove("dim-"+i);el.classList.add("dim-"+dim);}
-
-// ── Settings ──────────────────────────────────────────────────────────────────
-document.getElementById("settings-btn").onclick=()=>document.getElementById("settings-modal").classList.add("visible");
-document.getElementById("settings-close-btn").onclick=()=>{ document.getElementById("settings-modal").classList.remove("visible"); saveSettings(); };
-document.querySelectorAll(".modal-overlay").forEach(m => m.addEventListener("click", e => {
-  if(e.target===m) { m.classList.remove("visible"); if(m.id==="settings-modal") saveSettings(); }
-}));
-
-async function saveSettings() {
-  const settings = { zoomSpeed: document.getElementById("zoom-speed-select").value };
-  try { await fetch("/save_settings", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(settings) }); } catch(e){}
-}
-async function loadSettings() {
-  try {
-    const r=await fetch("/load_settings");
-    if(r.ok) { const data = await r.json(); if(data.zoomSpeed) { document.getElementById("zoom-speed-select").value = data.zoomSpeed; SCALE_STEP = parseFloat(data.zoomSpeed); } }
-  } catch(e){}
-}
 
 // ── Undo / Redo ───────────────────────────────────────────────────────────────
 function captureSnapshot(){ return JSON.stringify({ nodes:nodes.map(n=>({...n,meta:{...n.meta}})), links:links.map(l=>({...l})), groups:groups.map(g=>({...g,nodeIds:[...g.nodeIds]})), nextNodeId,nextLinkId,nextGroupId }); }
@@ -1073,8 +1186,11 @@ function addNodeToGroup(nodeId,gid){
   redrawGroups();saveGraph();
 }
 
-function collapseGroup(gid){
+// Emitting Live Collapse Events Makes Them Seamless
+function collapseGroup(gid, emitEvent = true){
   const g=groups.find(x=>x.id===gid);if(!g||g.collapsed)return;
+  if (emitEvent && socket) socket.emit("group_action", { room: SHARE_ID, action: "collapse", gid });
+  
   pushUndo(); g.savedPositions={};
   g.nodeIds.forEach(nid=>{const n=nodes.find(x=>x.id===nid);if(n)g.savedPositions[nid]={x:n.x,y:n.y};});
   const bounds=getGroupBounds(g);
@@ -1084,11 +1200,14 @@ function collapseGroup(gid){
     g.collapsedX=cx;g.collapsedY=cy;
   }
   g.collapsed=true; g.nodeIds.forEach(nid=>{const el=getNodeEl(nid);if(el)el.style.display="none";});
-  redrawLinks();redrawGroups();saveGraph(); setTimeout(()=>smartRecenter(true),80);
+  redrawLinks();redrawGroups();saveGraph(); 
+  if (emitEvent) setTimeout(()=>smartRecenter(true),80);
 }
 
-function expandGroup(gid,skipSave){
+function expandGroup(gid, skipSave, emitEvent = true){
   const g=groups.find(x=>x.id===gid);if(!g||!g.collapsed)return;
+  if (emitEvent && socket) socket.emit("group_action", { room: SHARE_ID, action: "expand", gid });
+  
   g.collapsed=false;
   if(g.savedPositions){
     g.nodeIds.forEach(nid=>{
@@ -1101,7 +1220,8 @@ function expandGroup(gid,skipSave){
       }
     }); delete g.savedPositions;
   } else { g.nodeIds.forEach(nid=>{const el=getNodeEl(nid);if(el)el.style.display="";}); }
-  redrawLinks();redrawGroups(); if(!skipSave)saveGraph(); zoomToGroup(gid, true);
+  redrawLinks();redrawGroups(); if(!skipSave)saveGraph(); 
+  if(emitEvent) zoomToGroup(gid, true);
 }
 
 function redrawGroups(){
@@ -1239,7 +1359,7 @@ function updateNodeTextDOM(node) {
 }
 
 function handleNodeInputBroadcast(node) {
-  if (IS_SHARED && socket) {
+  if (socket) {
       socket.emit("node_text", { room: SHARE_ID, id: node.id, text: node.text, title: node.meta.title, topic: node.meta.topic });
   }
 }
@@ -1383,7 +1503,7 @@ document.addEventListener("mousemove",e=>{
   const el=getNodeEl(draggingNode.id);
   if(el){el.style.left=draggingNode.x+"px";el.style.top=draggingNode.y+"px";}
   
-  if (IS_SHARED && socket) {
+  if (socket) {
     socket.emit("node_move", {room: SHARE_ID, id: draggingNode.id, x: draggingNode.x, y: draggingNode.y});
   }
   
@@ -1544,16 +1664,14 @@ function saveGraph(){
     groups:groups.map(g=>({id:g.id,name:g.name,color:g.color,nodeIds:[...g.nodeIds],collapsed:!!g.collapsed,collapsedW:g.collapsedW||160,collapsedH:g.collapsedH||60,collapsedX:g.collapsedX,collapsedY:g.collapsedY,savedPositions:g.savedPositions})),
     nextNodeId,nextLinkId,nextGroupId
   };
-  if(IS_SHARED && socket) {
+  if(socket) {
     socket.emit("graph_update", { room: SHARE_ID, graph: graphData });
-  } else {
-    fetch("/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(graphData)}).catch(()=>{});
   }
 }
 async function loadGraph(){
   try{
-    const endpoint = IS_SHARED ? `/load_shared/${SHARE_ID}` : "/load";
-    const res=await fetch(endpoint);if(!res.ok)return;
+    const res=await fetch(`/api/board/load/${SHARE_ID}`);
+    if(!res.ok)return;
     const data=await res.json();if(!data||!data.nodes)return;
     nodes=data.nodes||[];links=data.links||[];groups=data.groups||[];
     groups.forEach(g=>{if(!g.collapsedW)g.collapsedW=160;if(!g.collapsedH)g.collapsedH=60;});
@@ -1588,166 +1706,174 @@ document.getElementById("study-btn").onclick=async()=>{
 initZoom(); initCanvas(); loadSettings();
 loadGraph().then(()=>{ if(nodes.length>0||groups.some(g=>g.collapsed)){ setTimeout(()=>smartRecenter(false),100); } });
 
-// ── Dashboard / Shared With Me ────────────────────────────────────────────────
+// ── Dashboard / Multiple Canvases ─────────────────────────────────────────────
 document.getElementById("dash-btn").onclick = async () => {
   document.getElementById("dash-modal").classList.add("visible");
-  const list = document.getElementById("dash-list");
-  list.innerHTML = "Loading...";
+  const myList = document.getElementById("my-dash-list");
+  const sharedList = document.getElementById("shared-dash-list");
+  myList.innerHTML = "Loading..."; sharedList.innerHTML = "Loading...";
   try {
     const r = await fetch("/api/dashboard");
     const d = await r.json();
-    list.innerHTML = "";
+    myList.innerHTML = ""; sharedList.innerHTML = "";
+    
+    if (d.my_graphs && d.my_graphs.length > 0) {
+      d.my_graphs.forEach(item => {
+        const row = document.createElement("div"); row.className = "dash-item";
+        const dateStr = item.updated_at ? item.updated_at.split('T')[0] : 'Recently';
+        row.innerHTML = `<div><strong>${item.title}</strong><br><span style="color:var(--muted2);font-size:10px;">Updated: ${dateStr}</span></div><span style="color:var(--accent);">Go →</span>`;
+        row.onclick = () => window.location.href = "/b/" + item.share_id;
+        myList.appendChild(row);
+      });
+    } else { myList.innerHTML = "<div style='color:var(--muted2); font-size:11px; padding:12px;'>No canvases yet.</div>"; }
+    
     if (d.shared_with_me && d.shared_with_me.length > 0) {
       d.shared_with_me.forEach(item => {
-        const row = document.createElement("div");
-        row.className = "dash-item";
-        // Safe split without crashing if date is missing
+        const row = document.createElement("div"); row.className = "dash-item";
         const dateStr = item.added_at ? item.added_at.split('T')[0] : 'Recently';
-        row.innerHTML = `<div><strong>${item.owner_email}'s Graph</strong><br><span style="color:var(--muted2);font-size:10px;">Added: ${dateStr}</span></div><span style="color:var(--accent);">Go →</span>`;
-        row.onclick = () => window.location.href = "/shared/" + item.share_id;
-        list.appendChild(row);
+        row.innerHTML = `<div><strong>${item.title}</strong> (${item.owner_email})<br><span style="color:var(--muted2);font-size:10px;">Added: ${dateStr}</span></div><span style="color:var(--accent);">Go →</span>`;
+        row.onclick = () => window.location.href = "/b/" + item.share_id;
+        sharedList.appendChild(row);
       });
-    } else {
-      list.innerHTML = "<div style='color:var(--muted2); font-size:11px; padding:12px;'>No graphs shared with you yet.</div>";
-    }
+    } else { sharedList.innerHTML = "<div style='color:var(--muted2); font-size:11px; padding:12px;'>No graphs shared with you yet.</div>"; }
   } catch(e) { 
-    list.innerHTML = "Error loading."; 
-    console.error("Dashboard error:", e);
+    myList.innerHTML = "Error loading."; sharedList.innerHTML = "Error loading."; 
   }
 };
 
+document.getElementById("new-canvas-btn").onclick = async () => {
+    try {
+        const res = await fetch("/api/board/new", { method:"POST" });
+        const d = await res.json();
+        if(d.share_id) window.location.href = "/b/" + d.share_id;
+    } catch(e) {}
+};
+
 // ── Collaboration (WebSockets) ────────────────────────────────────────────────
-if (IS_SHARED) {
-  socket = io();
-  socket.on("connect", () => {
-    socket.emit("join", { room: SHARE_ID });
-  });
+socket.on("connect", () => {
+  socket.emit("join", { room: SHARE_ID });
+});
 
-  // Jump to Editor feature
-  function jumpToUser(email) {
-    if (userLastPositions[email]) {
-      smartRecenter(true, userLastPositions[email].x, userLastPositions[email].y);
-    }
+function jumpToUser(email) {
+  if (userLastPositions[email]) {
+    smartRecenter(true, userLastPositions[email].x, userLastPositions[email].y);
   }
-
-  socket.on("presence_update", (users) => {
-    const pb = document.getElementById("presence-bar");
-    pb.innerHTML = "";
-    // Sort so current user is last or first to avoid jumping
-    users.forEach((u, i) => {
-      const init = (u.email || "A").substring(0, 1).toUpperCase();
-      const av = document.createElement("div");
-      av.className = "presence-avatar";
-      av.style.background = u.color || "#7c3aed";
-      av.style.zIndex = users.length - i;
-      av.title = u.email + (u.email === currentUserEmail ? " (You)" : " - Click to jump");
-      av.textContent = init;
-      if (u.email !== currentUserEmail) {
-        av.onclick = () => jumpToUser(u.email);
-      }
-      pb.appendChild(av);
-    });
-  });
-
-  socket.on("cursor_update", (c) => {
-    let cursor = remoteCursors[c.id];
-    userLastPositions[c.email] = {x: c.x, y: c.y}; // Store latest for jumping
-    if (!cursor) {
-      cursor = document.createElement("div");
-      cursor.className = "remote-cursor";
-      cursor.innerHTML = `
-        <svg viewBox="0 0 16 16" fill="${c.color}">
-          <path d="M1 1l6 14 2-5 5-2L1 1z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/>
-        </svg>
-        <div class="remote-cursor-label" style="background: ${c.color}">${c.email.split('@')[0]}</div>
-      `;
-      document.getElementById("link-layer").parentElement.appendChild(cursor);
-      remoteCursors[c.id] = cursor;
-    }
-    cursor.style.left = c.x + "px";
-    cursor.style.top = c.y + "px";
-  });
-
-  socket.on("cursor_remove", (data) => {
-    if (remoteCursors[data.id]) {
-      remoteCursors[data.id].remove();
-      delete remoteCursors[data.id];
-    }
-  });
-  
-  // Granular Sync Events
-  socket.on("node_move", data => {
-    const n = nodes.find(x => x.id === data.id);
-    if (n && (!draggingNode || draggingNode.id !== n.id)) {
-        n.x = data.x; n.y = data.y;
-        const el = getNodeEl(n.id);
-        if (el) { el.style.left = n.x + "px"; el.style.top = n.y + "px"; }
-        redrawLinks();
-    }
-  });
-  
-  socket.on("node_text", data => {
-    const n = nodes.find(x => x.id === data.id);
-    if (n) {
-        n.text = data.text;
-        if(data.title !== undefined) n.meta.title = data.title;
-        if(data.topic !== undefined) n.meta.topic = data.topic;
-        updateNodeTextDOM(n);
-    }
-  });
-
-  // Smart Diff Full Sync (fallback / structural changes)
-  socket.on("graph_sync", (graphData) => {
-    const incomingNodes = new Map(graphData.nodes.map(n => [n.id, n]));
-    
-    // Remove deleted nodes
-    nodes = nodes.filter(n => {
-      if (!incomingNodes.has(n.id)) {
-        const el = getNodeEl(n.id); if(el) el.remove(); return false;
-      }
-      return true;
-    });
-
-    // Add/Update nodes
-    graphData.nodes.forEach(inNode => {
-      const exist = nodes.find(n => n.id === inNode.id);
-      if (exist) {
-         const isDragging = draggingNode && draggingNode.id === exist.id;
-         const isEditing = document.activeElement && document.activeElement.closest(`.node[data-id="${exist.id}"]`);
-         if (!isDragging) { exist.x = inNode.x; exist.y = inNode.y; }
-         if (!isEditing) { exist.text = inNode.text; exist.meta = inNode.meta; exist.completed = inNode.completed; }
-         exist.type = inNode.type; exist.groupId = inNode.groupId;
-         
-         const el = getNodeEl(exist.id);
-         if (el) {
-           if(!isDragging) { el.style.left = exist.x + "px"; el.style.top = exist.y + "px"; }
-           if(!isEditing) { updateNodeTextDOM(exist); if(exist.completed) el.classList.add("completed"); else el.classList.remove("completed"); }
-         }
-      } else {
-         nodes.push(inNode); createNodeElement(inNode);
-      }
-    });
-    
-    links = graphData.links; redrawLinks();
-    groups = graphData.groups; redrawGroups();
-
-    nextNodeId = graphData.nextNodeId; nextLinkId = graphData.nextLinkId; nextGroupId = graphData.nextGroupId;
-  });
-
-  let lastCursorSync = 0;
-  canvasWrapper.addEventListener("mousemove", e => {
-    const now = Date.now();
-    if (now - lastCursorSync > 50) {
-      const cc = clientToCanvas(e.clientX, e.clientY);
-      socket.emit("cursor_move", { room: SHARE_ID, x: cc.x, y: cc.y });
-      lastCursorSync = now;
-    }
-  });
 }
 
-// ── Share Modal Logic ─────────────────────────────────────────────────────────
+socket.on("presence_update", (users) => {
+  const pb = document.getElementById("presence-bar");
+  pb.innerHTML = "";
+  users.forEach((u, i) => {
+    const init = (u.email || "A").substring(0, 1).toUpperCase();
+    const av = document.createElement("div");
+    av.className = "presence-avatar";
+    av.style.background = u.color || "#7c3aed";
+    av.style.zIndex = users.length - i;
+    av.title = u.email + (u.email === currentUserEmail ? " (You)" : " - Click to jump");
+    av.textContent = init;
+    if (u.email !== currentUserEmail) av.onclick = () => jumpToUser(u.email);
+    pb.appendChild(av);
+  });
+});
+
+socket.on("cursor_update", (c) => {
+  let cursor = remoteCursors[c.id];
+  userLastPositions[c.email] = {x: c.x, y: c.y};
+  if (!cursor) {
+    cursor = document.createElement("div");
+    cursor.className = "remote-cursor";
+    cursor.innerHTML = `
+      <svg viewBox="0 0 16 16" fill="${c.color}">
+        <path d="M1 1l6 14 2-5 5-2L1 1z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>
+      <div class="remote-cursor-label" style="background: ${c.color}">${c.email.split('@')[0]}</div>
+    `;
+    document.getElementById("link-layer").parentElement.appendChild(cursor);
+    remoteCursors[c.id] = cursor;
+  }
+  cursor.style.left = c.x + "px";
+  cursor.style.top = c.y + "px";
+});
+
+socket.on("cursor_remove", (data) => {
+  if (remoteCursors[data.id]) {
+    remoteCursors[data.id].remove();
+    delete remoteCursors[data.id];
+  }
+});
+
+socket.on("node_move", data => {
+  const n = nodes.find(x => x.id === data.id);
+  if (n && (!draggingNode || draggingNode.id !== n.id)) {
+      n.x = data.x; n.y = data.y;
+      const el = getNodeEl(n.id);
+      if (el) { el.style.left = n.x + "px"; el.style.top = n.y + "px"; }
+      redrawLinks();
+  }
+});
+
+socket.on("node_text", data => {
+  const n = nodes.find(x => x.id === data.id);
+  if (n) {
+      n.text = data.text;
+      if(data.title !== undefined) n.meta.title = data.title;
+      if(data.topic !== undefined) n.meta.topic = data.topic;
+      updateNodeTextDOM(n);
+  }
+});
+
+socket.on("group_action", data => {
+    if(data.action === "collapse") collapseGroup(data.gid, false);
+    if(data.action === "expand") expandGroup(data.gid, true, false);
+});
+
+socket.on("graph_sync", (graphData) => {
+  const incomingNodes = new Map(graphData.nodes.map(n => [n.id, n]));
+  
+  nodes = nodes.filter(n => {
+    if (!incomingNodes.has(n.id)) {
+      const el = getNodeEl(n.id); if(el) el.remove(); return false;
+    }
+    return true;
+  });
+
+  graphData.nodes.forEach(inNode => {
+    const exist = nodes.find(n => n.id === inNode.id);
+    if (exist) {
+       const isDragging = draggingNode && draggingNode.id === exist.id;
+       const isEditing = document.activeElement && document.activeElement.closest(`.node[data-id="${exist.id}"]`);
+       if (!isDragging) { exist.x = inNode.x; exist.y = inNode.y; }
+       if (!isEditing) { exist.text = inNode.text; exist.meta = inNode.meta; exist.completed = inNode.completed; }
+       exist.type = inNode.type; exist.groupId = inNode.groupId;
+       
+       const el = getNodeEl(exist.id);
+       if (el) {
+         if(!isDragging) { el.style.left = exist.x + "px"; el.style.top = exist.y + "px"; }
+         if(!isEditing) { updateNodeTextDOM(exist); if(exist.completed) el.classList.add("completed"); else el.classList.remove("completed"); }
+       }
+    } else {
+       nodes.push(inNode); createNodeElement(inNode);
+    }
+  });
+  
+  links = graphData.links; redrawLinks();
+  groups = graphData.groups; redrawGroups();
+
+  nextNodeId = graphData.nextNodeId; nextLinkId = graphData.nextLinkId; nextGroupId = graphData.nextGroupId;
+});
+
+let lastCursorSync = 0;
+canvasWrapper.addEventListener("mousemove", e => {
+  const now = Date.now();
+  if (now - lastCursorSync > 50) {
+    const cc = clientToCanvas(e.clientX, e.clientY);
+    socket.emit("cursor_move", { room: SHARE_ID, x: cc.x, y: cc.y });
+    lastCursorSync = now;
+  }
+});
+
+// ── Share & Collaboration Management ──────────────────────────────────────────
 async function fetchCollaborators() {
-  if (!IS_SHARED) return;
   try {
     const res = await fetch(`/api/collaborators/${SHARE_ID}`);
     const data = await res.json();
@@ -1756,29 +1882,36 @@ async function fetchCollaborators() {
     if (data.collaborators && data.collaborators.length > 0) {
       data.collaborators.forEach(c => {
         const el = document.createElement("div"); el.className = "collab-item";
-        el.innerHTML = `<span>${c.email}</span><span style="color:var(--muted2)">Can Edit</span>`;
+        el.innerHTML = `<span>${c.email}</span>
+        <div style="display:flex;gap:6px;align-items:center;">
+            <span style="color:var(--muted2)">Can Edit</span>
+            ${IS_OWNER ? `<button class="remove-collab-btn" onclick="removeCollab('${c.email}')" title="Remove">✕</button>` : ''}
+        </div>`;
         list.appendChild(el);
       });
       document.getElementById("collab-wrap").style.display = "flex";
-    }
+    } else { document.getElementById("collab-wrap").style.display = "none"; }
   } catch(e) {}
 }
 
-document.getElementById("share-btn").onclick = async () => {
-  if (IS_SHARED) {
-    const input = document.getElementById("share-link-input");
-    input.value = window.location.href;
-    fetchCollaborators();
-    document.getElementById("share-modal").classList.add("visible");
-  } else {
+window.removeCollab = async function(email) {
+    if (!confirm(`Are you sure you want to remove ${email} from this canvas?`)) return;
     try {
-      const res = await fetch("/share/create", {method:"POST"});
-      const data = await res.json();
-      if (data.share_id) {
-        window.location.href = "/shared/" + data.share_id;
-      }
+        const res = await fetch("/share/remove", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ share_id: SHARE_ID, email: email })
+        });
+        const d = await res.json();
+        if (d.ok) fetchCollaborators();
+        else alert(d.error || "Could not remove user.");
     } catch(e) {}
-  }
+};
+
+document.getElementById("share-btn").onclick = async () => {
+  const input = document.getElementById("share-link-input");
+  input.value = window.location.href;
+  fetchCollaborators();
+  document.getElementById("share-modal").classList.add("visible");
 };
 
 document.getElementById("share-copy-btn").onclick = () => {
@@ -1809,7 +1942,6 @@ document.getElementById("invite-btn").onclick = async () => {
   } catch(e) {}
   btn.textContent = "Invite";
 };
-
 </script>
 </body>
 </html>"""
@@ -1819,7 +1951,21 @@ def index():
     if "user_id" not in session: 
         session["next_url"] = "/"
         return redirect("/login")
-    return Response(INDEX_HTML, mimetype="text/html")
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT share_id FROM graphs WHERE user_id=%s ORDER BY updated_at DESC LIMIT 1", (session["user_id"],))
+    row = cursor.fetchone()
+    if row:
+        share_id = row["share_id"]
+    else:
+        share_id = secrets.token_urlsafe(12)
+        cursor.execute("INSERT INTO graphs (user_id, data, share_id, title) VALUES (%s, %s, %s, %s)", (session["user_id"], "{}", share_id, "Personal Graph"))
+        conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return redirect(f"/b/{share_id}")
 
 # ── Groq API Calls ────────────────────────────────────────────────────────────
 def call_groq(messages):
@@ -1958,63 +2104,46 @@ def find():
     d=request.get_json()
     return jsonify({"nodeId":find_with_groq(d.get("query",""),d.get("nodes",[]))})
 
-@app.route("/save",methods=["POST"])
-def save():
-    if "user_id" not in session:return jsonify({"error":"unauthorized"}),401
-    conn = get_db()
-    cursor = conn.cursor()
-    try:
-        uid = session["user_id"]
-        data = json.dumps(request.get_json(), ensure_ascii=False)
-        cursor.execute("SELECT id FROM graphs WHERE user_id=%s", (uid,))
-        existing = cursor.fetchone()
+# ── Collaboration & Universal Board Routes ──────────────────────────────────────────────
+@app.route("/b/<share_id>")
+def board(share_id):
+    if "user_id" not in session: 
+        session["next_url"] = f"/b/{share_id}"
+        return redirect("/login")
         
-        if existing:
-            cursor.execute("UPDATE graphs SET data=%s, updated_at=CURRENT_TIMESTAMP WHERE user_id=%s", (data, uid))
-        else:
-            cursor.execute("INSERT INTO graphs (user_id, data) VALUES (%s, %s)", (uid, data))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
-    return jsonify({"ok":True})
-
-@app.route("/load",methods=["GET"])
-def load():
-    if "user_id" not in session:return jsonify({}),401
     conn = get_db()
     cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT data FROM graphs WHERE user_id=%s", (session["user_id"],))
-        row = cursor.fetchone()
-        if not row: return jsonify({}), 404
-        return jsonify(json.loads(row["data"]))
-    except:
-        return jsonify({}), 500
-    finally:
+    cursor.execute("SELECT user_id, title FROM graphs WHERE share_id=%s", (share_id,))
+    graph = cursor.fetchone()
+    
+    if not graph:
         cursor.close()
         conn.close()
+        return "Canvas not found.", 404
+        
+    is_owner = (graph["user_id"] == session["user_id"])
+    if not is_owner:
+        cursor.execute("SELECT 1 FROM graph_collaborators WHERE graph_id=(SELECT id FROM graphs WHERE share_id=%s) AND user_id=%s", (share_id, session["user_id"]))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return "You do not have access to this canvas. Ask the owner to invite you.", 403
+            
+    cursor.close()
+    conn.close()
+    
+    html = INDEX_HTML.replace("$$SHARE_ID$$", share_id).replace("$$IS_OWNER$$", "true" if is_owner else "false").replace("$$BOARD_TITLE$$", graph["title"].replace("'", "\\'"))
+    return Response(html, mimetype="text/html")
 
-# ── Collaboration Routes & Sockets ──────────────────────────────────────────────
-@app.route("/share/create", methods=["POST"])
-def create_share():
+@app.route("/api/board/new", methods=["POST"])
+def create_board():
     if "user_id" not in session: return jsonify({"error": "unauthorized"}), 401
     conn = get_db()
     cursor = conn.cursor()
     try:
-        uid = session["user_id"]
-        cursor.execute("SELECT share_id FROM graphs WHERE user_id=%s", (uid,))
-        row = cursor.fetchone()
-        if row and row["share_id"]:
-            share_id = row["share_id"]
-        else:
-            share_id = str(uuid.uuid4())
-            cursor.execute("UPDATE graphs SET share_id=%s WHERE user_id=%s", (share_id, uid))
-            if cursor.rowcount == 0:
-                cursor.execute("INSERT INTO graphs (user_id, data, share_id) VALUES (%s, %s, %s)", (uid, "{}", share_id))
-            conn.commit()
+        share_id = secrets.token_urlsafe(12)
+        cursor.execute("INSERT INTO graphs (user_id, data, share_id, title) VALUES (%s, %s, %s, %s)", (session["user_id"], "{}", share_id, "New Canvas"))
+        conn.commit()
         return jsonify({"share_id": share_id})
     except Exception as e:
         conn.rollback()
@@ -2023,14 +2152,7 @@ def create_share():
         cursor.close()
         conn.close()
 
-@app.route("/shared/<share_id>")
-def shared_graph(share_id):
-    if "user_id" not in session: 
-        session["next_url"] = f"/shared/{share_id}"
-        return redirect("/login")
-    return Response(INDEX_HTML.replace("const IS_SHARED = false;", f"const IS_SHARED = true; const SHARE_ID = '{share_id}';"), mimetype="text/html")
-
-@app.route("/load_shared/<share_id>", methods=["GET"])
+@app.route("/api/board/load/<share_id>", methods=["GET"])
 def load_shared(share_id):
     if "user_id" not in session: return jsonify({}), 401
     conn = get_db()
@@ -2046,6 +2168,22 @@ def load_shared(share_id):
         cursor.close()
         conn.close()
 
+@app.route("/api/board/title", methods=["POST"])
+def update_title():
+    if "user_id" not in session: return jsonify({"error": "unauthorized"}), 401
+    d = request.get_json()
+    share_id = d.get("share_id")
+    title = d.get("title", "Untitled Canvas")
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE graphs SET title=%s WHERE share_id=%s AND user_id=%s", (title, share_id, session["user_id"]))
+        conn.commit()
+        return jsonify({"ok": True})
+    finally:
+        cursor.close()
+        conn.close()
+
 @app.route("/api/dashboard", methods=["GET"])
 def get_dashboard():
     if "user_id" not in session: return jsonify({}), 401
@@ -2053,26 +2191,34 @@ def get_dashboard():
     cursor = conn.cursor()
     try:
         uid = session["user_id"]
-        # Get canvases shared with this user
+        
+        # My Graphs
         cursor.execute("""
-            SELECT g.share_id, gc.added_at, g.updated_at, u.email as owner_email
+            SELECT share_id, title, updated_at 
+            FROM graphs 
+            WHERE user_id = %s 
+            ORDER BY updated_at DESC
+        """, (uid,))
+        my_graphs = cursor.fetchall()
+        for row in my_graphs:
+            if row.get("updated_at"): row["updated_at"] = row["updated_at"].isoformat()
+
+        # Shared with me
+        cursor.execute("""
+            SELECT g.share_id, g.title, gc.added_at, g.updated_at, u.email as owner_email
             FROM graph_collaborators gc
             JOIN graphs g ON gc.graph_id = g.id
             JOIN users u ON g.user_id = u.id
             WHERE gc.user_id = %s
+            ORDER BY gc.added_at DESC
         """, (uid,))
         shared_with_me = cursor.fetchall()
-        
-        # FIX: Format datetime objects to strings before converting to JSON!
         for row in shared_with_me:
-            if row.get("added_at"):
-                row["added_at"] = row["added_at"].isoformat()
-            if row.get("updated_at"):
-                row["updated_at"] = row["updated_at"].isoformat()
+            if row.get("added_at"): row["added_at"] = row["added_at"].isoformat()
+            if row.get("updated_at"): row["updated_at"] = row["updated_at"].isoformat()
                 
-        return jsonify({"shared_with_me": shared_with_me})
+        return jsonify({"my_graphs": my_graphs, "shared_with_me": shared_with_me})
     except Exception as e:
-        print("Dashboard error:", e)
         return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
@@ -2107,25 +2253,47 @@ def invite_collaborator():
     conn = get_db()
     cursor = conn.cursor()
     try:
-        # Find user by email
+        # Check permissions
+        cursor.execute("SELECT id FROM graphs WHERE share_id=%s AND user_id=%s", (share_id, session["user_id"]))
+        graph = cursor.fetchone()
+        if not graph: return jsonify({"error": "Only the canvas owner can invite people."})
+
+        # Find user
         cursor.execute("SELECT id FROM users WHERE email=%s", (email,))
         user = cursor.fetchone()
-        if not user:
-            return jsonify({"error": "User not found. Ask them to sign up first!"})
+        if not user: return jsonify({"error": "User not found. Ask them to sign up first!"})
+        if user["id"] == session["user_id"]: return jsonify({"error": "You already own this canvas."})
             
-        # Find graph by share_id
-        cursor.execute("SELECT id FROM graphs WHERE share_id=%s", (share_id,))
-        graph = cursor.fetchone()
-        if not graph:
-            return jsonify({"error": "Graph not found."})
-            
-        # Add to collaborators
         cursor.execute("INSERT INTO graph_collaborators (graph_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (graph["id"], user["id"]))
         conn.commit()
         return jsonify({"ok": True})
     except Exception as e:
         conn.rollback()
         return jsonify({"error": "Database error."})
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/share/remove", methods=["POST"])
+def remove_collaborator():
+    if "user_id" not in session: return jsonify({"error": "unauthorized"}), 401
+    d = request.get_json()
+    email = d.get("email", "").strip().lower()
+    share_id = d.get("share_id")
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM graphs WHERE share_id=%s AND user_id=%s", (share_id, session["user_id"]))
+        graph = cursor.fetchone()
+        if not graph: return jsonify({"error": "Only the canvas owner can remove collaborators."})
+        
+        cursor.execute("SELECT id FROM users WHERE email=%s", (email,))
+        user = cursor.fetchone()
+        if user:
+            cursor.execute("DELETE FROM graph_collaborators WHERE graph_id=%s AND user_id=%s", (graph["id"], user["id"]))
+            conn.commit()
+        return jsonify({"ok": True})
     finally:
         cursor.close()
         conn.close()
@@ -2169,17 +2337,27 @@ def on_cursor_move(data):
 
 @socketio.on("node_move")
 def on_node_move(data):
-    # Granular movement update, bypasses full graph sync for buttery smooth 60fps drag
     room = data.get("room")
     if room:
         emit("node_move", {"id": data.get("id"), "x": data.get("x"), "y": data.get("y")}, to=room, include_self=False)
 
 @socketio.on("node_text")
 def on_node_text(data):
-    # Granular text update
     room = data.get("room")
     if room:
         emit("node_text", data, to=room, include_self=False)
+
+@socketio.on("group_action")
+def on_group_action(data):
+    room = data.get("room")
+    if room:
+        emit("group_action", data, to=room, include_self=False)
+
+@socketio.on("title_update")
+def on_title_update(data):
+    room = data.get("room")
+    if room:
+        emit("title_update", data, to=room, include_self=False)
 
 @socketio.on("graph_update")
 def on_graph_update(data):
@@ -2195,8 +2373,6 @@ def on_graph_update(data):
         finally:
             cursor.close()
             conn.close()
-        # Fallback sync for structure changes (links, creations, deletions). 
-        # The client now intelligently diffs this.
         emit("graph_sync", data.get("graph"), to=room, include_self=False)
 
 if __name__=="__main__":
