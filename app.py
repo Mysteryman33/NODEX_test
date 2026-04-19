@@ -49,7 +49,7 @@ def init_db():
             data TEXT NOT NULL,
             share_id TEXT UNIQUE,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS user_settings (
@@ -340,6 +340,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   --node-a:#6ee7b7;
   --node-note:#93c5fd;
   --node-timer:#fbbf24;
+  --node-file:#818cf8;
 
   --ring-bg:#12121f;
   --select-color: #C79F00;
@@ -418,14 +419,25 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .node:hover .node-text{opacity:1!important;}
 .node:hover .node-circle{transform:scale(1.25);}
 
+/* Expandable content */
+.content-box { max-height: 150px; overflow-y: auto; overflow-wrap: anywhere; padding-right: 4px; max-width: 300px; }
+.content-box.expanded { max-height: none; }
+.expand-btn {
+  background: transparent; border: none; color: var(--accent);
+  font-size: 10px; cursor: pointer; padding: 4px 0 0 0; display: none;
+  font-family: inherit; width: 100%; text-align: left;
+}
+.expand-btn:hover { text-decoration: underline; }
+
 /* Node type colors */
-.node-question .node-circle{background:var(--node-q);box-shadow:0 0 8px var(--purple-glow),0 0 2px var(--purple-glow);}
+.node-question .node-circle, .node-text .node-circle {background:var(--node-q);box-shadow:0 0 8px var(--purple-glow),0 0 2px var(--purple-glow);}
 .node-answer .node-circle{background:var(--node-a);box-shadow:0 0 8px var(--green-glow),0 0 2px var(--green-glow);}
 .node-answer.completed .node-circle{background:var(--blue);box-shadow:0 0 8px var(--blue-glow),0 0 2px var(--blue-glow);}
 .node-timer .node-circle{background:var(--node-timer);box-shadow:0 0 8px rgba(251,191,36,0.4),0 0 2px rgba(251,191,36,0.4);}
 .node-timer.completed .node-circle{background:var(--blue);box-shadow:0 0 8px var(--blue-glow),0 0 2px var(--blue-glow);}
 .node-note .node-circle{background:var(--node-note);box-shadow:0 0 8px rgba(147,197,253,0.4),0 0 2px rgba(147,197,253,0.4);}
 .node-brainstorm .node-circle{background:var(--orange);box-shadow:0 0 8px rgba(249,115,22,0.4),0 0 2px rgba(249,115,22,0.4);}
+.node-file .node-circle{background:var(--node-file);box-shadow:0 0 8px rgba(129,140,248,0.4),0 0 2px rgba(129,140,248,0.4);}
 
 .node.selected .node-circle{background:var(--select-color)!important;box-shadow:0 0 0 2px var(--select-color),0 0 14px var(--accent-glow),0 0 4px var(--accent-glow)!important;transform:scale(1.3);}
 .node.ctrl-highlight .node-circle{outline:2px solid var(--orange);outline-offset:3px;box-shadow:0 0 12px rgba(249,115,22,0.5)!important;}
@@ -435,10 +447,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .group-badge{position:absolute;top:-8px;left:-4px;width:8px;height:8px;border-radius:50%;border:1px solid rgba(0,0,0,.4);z-index:6;}
 
 .bubble{
-  max-width:none; max-height:none; min-width: 150px; min-height: 50px;
+  min-width: 150px; min-height: 50px; max-width: 400px; max-height: 250px;
   padding:8px 10px; border-radius:12px;
   border:1px solid var(--border2);background:var(--surface2);
-  position: relative; overflow-y: auto; overflow-wrap: anywhere;
+  position: relative; overflow-y: auto; overflow-wrap: anywhere; resize: both;
 }
 .bubble-header{display:flex;justify-content:flex-end;margin-bottom:4px;}
 .copy-btn{
@@ -456,8 +468,8 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 }
 .note-title:focus{border-bottom-color:var(--accent);}
 .note-body{
-  min-width:150px;min-height:80px; max-width: none; max-height: none;
-  overflow-y:auto; overflow-wrap: anywhere; resize:none;
+  min-width:150px;min-height:80px; max-width: none; max-height: 250px;
+  overflow-y:auto; overflow-wrap: anywhere; resize:both;
   background:var(--surface2);border:1px solid var(--border2);border-radius:10px;
   color:var(--text);font-family:inherit;font-size:12px;padding:8px 10px;outline:none;
 }
@@ -473,6 +485,15 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .brainstorm-input:focus { border-color: var(--orange); }
 .brainstorm-run { background: var(--orange); color: white; font-weight: bold; font-family: inherit; border: none; padding: 6px 8px; font-size: 11px; cursor: pointer; border-radius: 6px; transition: opacity 0.2s; }
 .brainstorm-run:hover { opacity: 0.8; }
+
+.node-file-wrap {
+  background: var(--surface2); border: 1px dashed var(--muted);
+  border-radius: 8px; padding: 12px; width: 180px; cursor: pointer;
+  transition: all 0.2s;
+}
+.node-file-wrap:hover { border-color: var(--accent); }
+.node-file-wrap.drag-over { border-color: var(--accent); background: rgba(124,58,237,0.1); }
+.file-preview { max-width: 100%; max-height: 120px; border-radius: 4px; pointer-events: none; margin-top: 4px; }
 
 .timer-ring{position:relative;width:80px;height:80px;display:flex;align-items:center;justify-content:center;}
 .timer-ring svg{position:absolute;inset:0;transform:rotate(-90deg);}
@@ -643,8 +664,11 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .remove-collab-btn:hover { background: rgba(239,68,68,0.2); }
 
 .dash-list { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-.dash-item { font-size: 11px; padding: 12px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border2); cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center; }
+.dash-item { font-size: 11px; padding: 12px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border2); transition: all 0.2s; display: flex; justify-content: space-between; align-items: center; }
 .dash-item:hover { border-color: var(--accent); background: rgba(124,58,237,0.05); }
+
+.dash-delete-btn { background: transparent; border: none; color: var(--red); cursor: pointer; font-size: 14px; margin-left: 8px; padding: 4px; border-radius: 4px;}
+.dash-delete-btn:hover { background: rgba(239,68,68,0.2); }
 
 /* Share & Presence */
 #share-btn {
@@ -686,6 +710,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
     <button class="top-btn" id="group-btn">Group Nodes</button>
     <button class="top-btn" id="note-btn">Add Note</button>
     <button class="top-btn" id="brainstorm-btn">Brainstorm</button>
+    <button class="top-btn" id="drag-btn" title="Add File Node">📎 Drag</button>
     <button class="top-btn" id="settings-btn" title="Settings">⚙ Settings</button>
     
     <div id="presence-bar"></div>
@@ -816,7 +841,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 <script>
 // Injection points from Flask
-const IS_SHARED = true; // Every canvas is inherently collaborative and shareable now
+const IS_SHARED = true;
 const SHARE_ID = '$$SHARE_ID$$';
 const IS_OWNER = $$IS_OWNER$$;
 const BOARD_TITLE = '$$BOARD_TITLE$$';
@@ -1312,6 +1337,36 @@ function triggerGroupUI() {
 }
 document.getElementById("group-btn").onclick=triggerGroupUI;
 
+// File Upload Handling
+function handleFileUpload(file, node, wrap) {
+  if(!file) return;
+  if(file.size > 2 * 1024 * 1024) { alert("File is too large. Keep it under 2MB to keep syncing fast."); return; }
+  
+  node.meta.fileName = file.name;
+  node.meta.fileType = file.type;
+  
+  const processResult = (dataUrl, textContent) => {
+      node.meta.fileData = dataUrl;
+      if(textContent) node.text = textContent;
+      saveGraph();
+      const el = getNodeEl(node.id);
+      if(el) { el.remove(); createNodeElement(node); redrawLinks(); redrawGroups(); }
+  };
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+      const dataUrl = e.target.result;
+      if(file.type.startsWith("text/") || file.name.endsWith(".md") || file.name.endsWith(".json") || file.name.endsWith(".csv")) {
+          const txtReader = new FileReader();
+          txtReader.onload = (e2) => processResult(dataUrl, e2.target.result);
+          txtReader.readAsText(file);
+      } else {
+          processResult(dataUrl, `[File Reference: ${file.name}]`);
+      }
+  };
+  reader.readAsDataURL(file);
+}
+
 // Timer
 function createTimerContent(node){
   const wrap=document.createElement("div");wrap.className="timer-ring"; const svgNS="http://www.w3.org/2000/svg";
@@ -1352,7 +1407,14 @@ function updateNodeTextDOM(node) {
   } else if (node.type === "brainstorm") {
     const i = el.querySelector(".brainstorm-input");
     if(i && document.activeElement !== i) i.value = node.meta.topic || "";
-  } else {
+  } else if (node.type === "question" || node.type === "text") {
+    const box = el.querySelector(".content-box");
+    if (box) box.textContent = node.text;
+    else {
+        const t = el.querySelector(".node-text");
+        if(t) t.textContent = node.text;
+    }
+  } else if (node.type !== "file") {
     const t = el.querySelector(".node-text");
     if(t) t.textContent = node.text;
   }
@@ -1407,7 +1469,44 @@ function createNodeElement(node){
       runBtn.textContent="Run";
     };
     wrap.appendChild(input);wrap.appendChild(runBtn); textWrap.appendChild(wrap);
-  } else { textWrap.textContent=node.text; }
+  } else if (node.type === "file") {
+    const wrap = document.createElement("div"); wrap.className = "node-file-wrap";
+    if (node.meta.fileName) {
+        wrap.innerHTML = `<div style="font-size:11px;font-weight:bold;word-break:break-all;margin-bottom:4px;">📄 ${node.meta.fileName}</div>`;
+        if (node.meta.fileData && node.meta.fileType && node.meta.fileType.startsWith("image/")) {
+            wrap.innerHTML += `<img src="${node.meta.fileData}" class="file-preview" draggable="false"/>`;
+        }
+    } else {
+        wrap.innerHTML = `
+            <div style="font-size:11px;text-align:center;pointer-events:none;color:var(--muted);">Drop file here or click</div>
+            <input type="file" style="display:none;"/>
+        `;
+        const fileInput = wrap.querySelector("input");
+        wrap.onclick = (e) => { e.stopPropagation(); fileInput.click(); };
+        fileInput.onchange = (e) => { e.stopPropagation(); handleFileUpload(e.target.files[0], node, wrap); };
+        wrap.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); wrap.classList.add("drag-over"); };
+        wrap.ondragleave = (e) => { e.preventDefault(); e.stopPropagation(); wrap.classList.remove("drag-over"); };
+        wrap.ondrop = (e) => { e.preventDefault(); e.stopPropagation(); wrap.classList.remove("drag-over"); if(e.dataTransfer.files.length) handleFileUpload(e.dataTransfer.files[0], node, wrap); };
+    }
+    textWrap.appendChild(wrap);
+  } else { 
+    // Expandable content box for standard questions/text
+    const box = document.createElement("div"); box.className = "content-box"; box.textContent = node.text;
+    const exp = document.createElement("button"); exp.className = "expand-btn"; exp.textContent = "Show more";
+    textWrap.appendChild(box); textWrap.appendChild(exp);
+    
+    setTimeout(() => {
+        if (box.scrollHeight > box.clientHeight) {
+            exp.style.display = "block";
+            exp.onclick = (e) => {
+                e.stopPropagation();
+                box.classList.toggle("expanded");
+                exp.textContent = box.classList.contains("expanded") ? "Show less" : "Show more";
+                redrawLinks(); redrawGroups();
+            };
+        }
+    }, 10);
+  }
 
   if(node.type==="answer" || node.type==="note") {
     const rh = document.createElement("div"); rh.className = "group-resize-handle"; rh.style.background = "rgba(255,255,255,0.7)"; rh.style.zIndex = 20;
@@ -1426,7 +1525,7 @@ function createNodeElement(node){
   el.addEventListener("mousedown",e=>{
     if(e.shiftKey)return;
     if((node.type==="note"||node.type==="brainstorm")&&(e.target.tagName==="TEXTAREA"||e.target.tagName==="INPUT")){if(document.activeElement===e.target)return;}
-    if(e.target.classList.contains("group-resize-handle")) return;
+    if(e.target.classList.contains("group-resize-handle") || e.target.classList.contains("expand-btn")) return;
     e.stopPropagation(); draggingNode=node; const cc=clientToCanvas(e.clientX,e.clientY); dragOffset={x:cc.x-node.x,y:cc.y-node.y};
   });
 
@@ -1443,7 +1542,7 @@ function createNodeElement(node){
 function addNode(text,type,x=ORIGIN_X,y=ORIGIN_Y,meta={}){
   pushUndo(); const node={id:nextNodeId++,x,y,type,text,selected:false,dim:0,meta,completed:false}; nodes.push(node);createNodeElement(node);
   const sel=getSelectedNodes();
-  if(sel.length>0) { sel.forEach(s=>addLink(s.id,node.id)); } else if(!explicitlyDeselected && lastNodeId!==null) { addLink(lastNodeId,node.id); }
+  if(sel.length>0) { sel.forEach(s=>addLink(s.id,node.id)); } else if(!explicitlyDeselected && lastNodeId!==null && type !== "file") { addLink(lastNodeId,node.id); }
   explicitlyDeselected=false; lastNodeId=node.id; saveGraph(); return node;
 }
 
@@ -1631,9 +1730,34 @@ promptEl.addEventListener("keydown",e=>{
 });
 
 async function runFindCommand(query){
-  if(!query.trim())return; const descs=nodes.map(n=>({id:n.id,type:n.type,text:(n.text||"").slice(0,200),x:Math.round(n.x),y:Math.round(n.y)}));
-  const res=await fetch("/find",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query,nodes:descs})}); const data=await res.json();
-  if(data.nodeId){ const t=nodes.find(n=>n.id===data.nodeId); if(t){ canvas.querySelectorAll(".node.find-focus").forEach(el=>el.classList.remove("find-focus")); const el=getNodeEl(t.id);if(el)el.classList.add("find-focus"); canvasWrapper.scrollTo({left:Math.max(0,t.x*currentScale-canvasWrapper.clientWidth/2+80),top:Math.max(0,t.y*currentScale-canvasWrapper.clientHeight/2+40),behavior:"smooth"}); setTimeout(()=>{if(el)el.classList.remove("find-focus");},3000); } }
+  if(!query.trim())return; 
+  const descs=nodes.map(n=>({id:n.id,type:n.type,text:(n.text||"").slice(0,200),x:Math.round(n.x),y:Math.round(n.y)}));
+  
+  let foundId = null;
+  try {
+      const res=await fetch("/find",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query,nodes:descs})}); 
+      const data=await res.json();
+      foundId = data.nodeId;
+  } catch(e) {}
+  
+  // Fallback: fast fuzzy match if AI failed
+  if (!foundId) {
+      const qLower = query.toLowerCase();
+      const match = nodes.find(n => (n.text||"").toLowerCase().includes(qLower) || (n.meta.title||"").toLowerCase().includes(qLower) || (n.meta.topic||"").toLowerCase().includes(qLower));
+      if(match) foundId = match.id;
+  }
+
+  if(foundId){ 
+      const t=nodes.find(n=>n.id===foundId); 
+      if(t){ 
+          canvas.querySelectorAll(".node.find-focus").forEach(el=>el.classList.remove("find-focus")); 
+          const el=getNodeEl(t.id);if(el)el.classList.add("find-focus"); 
+          canvasWrapper.scrollTo({left:Math.max(0,t.x*currentScale-canvasWrapper.clientWidth/2+80),top:Math.max(0,t.y*currentScale-canvasWrapper.clientHeight/2+40),behavior:"smooth"}); 
+          setTimeout(()=>{if(el)el.classList.remove("find-focus");},3000); 
+      } 
+  } else {
+      alert("Could not find a matching node.");
+  }
 }
 function runDeleteCommand(arg){
   const a=(arg||"").trim().toLowerCase(); pushUndo();
@@ -1645,6 +1769,8 @@ function runDeleteCommand(arg){
 
 document.getElementById("note-btn").onclick=()=>{ const spawn=getSmartSpawnPos(); addNode("","note",spawn.x,spawn.y,{title:"Untitled"}); };
 document.getElementById("brainstorm-btn").onclick=()=>{ const spawn=getSmartSpawnPos(); addNode("","brainstorm",spawn.x,spawn.y,{topic:""}); };
+document.getElementById("drag-btn").onclick=()=>{ const spawn=getSmartSpawnPos(); addNode("","file",spawn.x,spawn.y); };
+
 function dimAllNodes(){nodes.forEach(n=>{n.dim=Math.min((n.dim||0)+1,4);const el=getNodeEl(n.id);if(el)applyDimClass(el,n.dim);});}
 function buildContext(){const sel=getSelectedNodes();return sel.length===0?"":sel.map(n=>n.text).join("\n---\n");}
 async function classifyInput(text){ const res=await fetch("/classify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({input:text})}); return await res.json(); }
@@ -1659,7 +1785,7 @@ async function updateSuggestions(){
 // ── Save / Load ───────────────────────────────────────────────────────────────
 function saveGraph(){
   const graphData = {
-    nodes:nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{topic:n.meta.topic||"",seconds:n.meta.seconds||0,label:n.meta.label||"",title:n.meta.title||"",w:n.meta.w||null,h:n.meta.h||null},completed:!!n.completed,groupId:n.groupId})),
+    nodes:nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{topic:n.meta.topic||"",seconds:n.meta.seconds||0,label:n.meta.label||"",title:n.meta.title||"",w:n.meta.w||null,h:n.meta.h||null,fileName:n.meta.fileName||null,fileType:n.meta.fileType||null,fileData:n.meta.fileData||null},completed:!!n.completed,groupId:n.groupId})),
     links:links.map(l=>({id:l.id,sourceId:l.sourceId,targetId:l.targetId})),
     groups:groups.map(g=>({id:g.id,name:g.name,color:g.color,nodeIds:[...g.nodeIds],collapsed:!!g.collapsed,collapsedW:g.collapsedW||160,collapsedH:g.collapsedH||60,collapsedX:g.collapsedX,collapsedY:g.collapsedY,savedPositions:g.savedPositions})),
     nextNodeId,nextLinkId,nextGroupId
@@ -1721,8 +1847,13 @@ document.getElementById("dash-btn").onclick = async () => {
       d.my_graphs.forEach(item => {
         const row = document.createElement("div"); row.className = "dash-item";
         const dateStr = item.updated_at ? item.updated_at.split('T')[0] : 'Recently';
-        row.innerHTML = `<div><strong>${item.title}</strong><br><span style="color:var(--muted2);font-size:10px;">Updated: ${dateStr}</span></div><span style="color:var(--accent);">Go →</span>`;
-        row.onclick = () => window.location.href = "/b/" + item.share_id;
+        row.innerHTML = `
+          <div style="flex:1;"><strong>${item.title}</strong><br><span style="color:var(--muted2);font-size:10px;">Updated: ${dateStr}</span></div>
+          <div style="display:flex;align-items:center;">
+              <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:4px 8px;font-size:10px;margin-right:8px;">Go →</button>
+              <button class="dash-delete-btn" onclick="deleteCanvas('${item.share_id}', event)" title="Delete Canvas">🗑</button>
+          </div>
+        `;
         myList.appendChild(row);
       });
     } else { myList.innerHTML = "<div style='color:var(--muted2); font-size:11px; padding:12px;'>No canvases yet.</div>"; }
@@ -1739,6 +1870,17 @@ document.getElementById("dash-btn").onclick = async () => {
   } catch(e) { 
     myList.innerHTML = "Error loading."; sharedList.innerHTML = "Error loading."; 
   }
+};
+
+window.deleteCanvas = async function(share_id, event) {
+  event.stopPropagation();
+  if(!confirm("Are you sure you want to permanently delete this canvas?")) return;
+  try {
+      const res = await fetch(`/api/board/${share_id}`, { method: "DELETE" });
+      const d = await res.json();
+      if(d.ok) document.getElementById("dash-btn").click();
+      else alert(d.error || "Failed to delete");
+  } catch(e) { alert("Error deleting"); }
 };
 
 document.getElementById("new-canvas-btn").onclick = async () => {
@@ -1802,6 +1944,15 @@ socket.on("cursor_remove", (data) => {
   }
 });
 
+socket.on("collab_removed", (data) => {
+  if (data.email === currentUserEmail) {
+      alert("Your access to this canvas has been revoked by the owner.");
+      window.location.href = "/";
+  } else {
+      fetchCollaborators();
+  }
+});
+
 socket.on("node_move", data => {
   const n = nodes.find(x => x.id === data.id);
   if (n && (!draggingNode || draggingNode.id !== n.id)) {
@@ -1842,14 +1993,25 @@ socket.on("graph_sync", (graphData) => {
     if (exist) {
        const isDragging = draggingNode && draggingNode.id === exist.id;
        const isEditing = document.activeElement && document.activeElement.closest(`.node[data-id="${exist.id}"]`);
+       
+       let structuralChange = false;
+       if (exist.type !== inNode.type || exist.groupId !== inNode.groupId || exist.meta.fileData !== inNode.meta.fileData) {
+           structuralChange = true;
+       }
+
        if (!isDragging) { exist.x = inNode.x; exist.y = inNode.y; }
        if (!isEditing) { exist.text = inNode.text; exist.meta = inNode.meta; exist.completed = inNode.completed; }
        exist.type = inNode.type; exist.groupId = inNode.groupId;
        
        const el = getNodeEl(exist.id);
        if (el) {
-         if(!isDragging) { el.style.left = exist.x + "px"; el.style.top = exist.y + "px"; }
-         if(!isEditing) { updateNodeTextDOM(exist); if(exist.completed) el.classList.add("completed"); else el.classList.remove("completed"); }
+         if(structuralChange) { 
+             el.remove(); 
+             createNodeElement(exist); 
+         } else {
+             if(!isDragging) { el.style.left = exist.x + "px"; el.style.top = exist.y + "px"; }
+             if(!isEditing) { updateNodeTextDOM(exist); if(exist.completed) el.classList.add("completed"); else el.classList.remove("completed"); }
+         }
        }
     } else {
        nodes.push(inNode); createNodeElement(inNode);
@@ -1902,7 +2064,7 @@ window.removeCollab = async function(email) {
             body: JSON.stringify({ share_id: SHARE_ID, email: email })
         });
         const d = await res.json();
-        if (d.ok) fetchCollaborators();
+        if (d.ok) fetchCollaborators(); // Socket emit takes care of kicking them
         else alert(d.error || "Could not remove user.");
     } catch(e) {}
 };
@@ -2010,15 +2172,15 @@ def merge_with_groq(a,b):
                       {"role":"user","content":"Text A:\n"+a},{"role":"user","content":"Text B:\n"+b}])
 
 def find_with_groq(query,node_descs):
-    sys='Graph search: find the single most relevant node. Return ONLY JSON: {"nodeId":<int>} or {"nodeId":null}.'
+    sys='Graph search: find the single most relevant node. Return ONLY valid JSON: {"nodeId": <id>} or {"nodeId": null}. No markdown tags.'
     raw=call_groq([{"role":"system","content":sys},
                    {"role":"user","content":f"Query: {query}\n\nNodes:\n{json.dumps(node_descs)}"}])
     try:
         clean=raw.strip().strip("```json").strip("```").strip()
         d=json.loads(clean)
-        if isinstance(d,dict) and "nodeId" in d:return d["nodeId"]
+        if isinstance(d,dict) and "nodeId" in d:return d
     except:pass
-    return None
+    return {"nodeId": None}
 
 # ── App Routes ────────────────────────────────────────────────────────────────
 @app.route("/brainstorm", methods=["POST"])
@@ -2102,7 +2264,8 @@ def merge():
 def find():
     if "user_id" not in session:return jsonify({"nodeId":None}),200
     d=request.get_json()
-    return jsonify({"nodeId":find_with_groq(d.get("query",""),d.get("nodes",[]))})
+    result = find_with_groq(d.get("query",""),d.get("nodes",[]))
+    return jsonify({"nodeId": result.get("nodeId")})
 
 # ── Collaboration & Universal Board Routes ──────────────────────────────────────────────
 @app.route("/b/<share_id>")
@@ -2145,6 +2308,27 @@ def create_board():
         cursor.execute("INSERT INTO graphs (user_id, data, share_id, title) VALUES (%s, %s, %s, %s)", (session["user_id"], "{}", share_id, "New Canvas"))
         conn.commit()
         return jsonify({"share_id": share_id})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/api/board/<share_id>", methods=["DELETE"])
+def delete_board(share_id):
+    if "user_id" not in session: return jsonify({"error": "unauthorized"}), 401
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id, user_id FROM graphs WHERE share_id=%s", (share_id,))
+        graph = cursor.fetchone()
+        if not graph: return jsonify({"error": "Not found"}), 404
+        if graph["user_id"] != session["user_id"]: return jsonify({"error": "Only the owner can delete this canvas."}), 403
+        
+        cursor.execute("DELETE FROM graphs WHERE id=%s", (graph["id"],))
+        conn.commit()
+        return jsonify({"ok": True})
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -2293,6 +2477,10 @@ def remove_collaborator():
         if user:
             cursor.execute("DELETE FROM graph_collaborators WHERE graph_id=%s AND user_id=%s", (graph["id"], user["id"]))
             conn.commit()
+            
+            # Emit socket event instantly kicking them out of the frontend board
+            socketio.emit("collab_removed", {"email": email}, to=share_id)
+            
         return jsonify({"ok": True})
     finally:
         cursor.close()
