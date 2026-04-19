@@ -320,6 +320,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
   --text:#e8e8f0;
   --muted:#4a4a6a;
   --muted2:#6a6a8a;
+  
+  --glass-bg: rgba(8, 8, 16, 0.65);
+  --grid-color: rgba(255, 255, 255, 0.08);
 
   /* Accent palette */
   --accent:#7c3aed;
@@ -340,7 +343,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
   --node-a:#6ee7b7;
   --node-note:#93c5fd;
   --node-timer:#fbbf24;
-  --node-file:#818cf8;
 
   --ring-bg:#12121f;
   --select-color: #C79F00;
@@ -374,9 +376,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 .user-badge{
   font-size:calc(10px * var(--ui-scale));color:var(--muted2);
-  padding:calc(5px * var(--ui-scale)) calc(10px * var(--ui-scale));
-  border:1px solid var(--border2);border-radius:6px;
-  background:var(--surface);letter-spacing:.05em;
+  padding:calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  border:1px solid rgba(255,255,255,0.1);border-radius:8px;
+  background:var(--glass-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  letter-spacing:.05em; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0;
 }
 .user-badge a{color:var(--accent);text-decoration:none;}
 .user-badge a:hover{color:var(--purple);}
@@ -389,8 +392,8 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 #canvas{
   position:absolute;top:0;left:0;
   background-image:
-    linear-gradient(rgba(150,150,150,0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(150,150,150,0.06) 1px, transparent 1px);
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 #link-layer{position:absolute;inset:0;pointer-events:auto;}
@@ -437,7 +440,6 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .node-timer.completed .node-circle{background:var(--blue);box-shadow:0 0 8px var(--blue-glow),0 0 2px var(--blue-glow);}
 .node-note .node-circle{background:var(--node-note);box-shadow:0 0 8px rgba(147,197,253,0.4),0 0 2px rgba(147,197,253,0.4);}
 .node-brainstorm .node-circle{background:var(--orange);box-shadow:0 0 8px rgba(249,115,22,0.4),0 0 2px rgba(249,115,22,0.4);}
-.node-file .node-circle{background:var(--node-file);box-shadow:0 0 8px rgba(129,140,248,0.4),0 0 2px rgba(129,140,248,0.4);}
 
 .node.selected .node-circle{background:var(--select-color)!important;box-shadow:0 0 0 2px var(--select-color),0 0 14px var(--accent-glow),0 0 4px var(--accent-glow)!important;transform:scale(1.3);}
 .node.ctrl-highlight .node-circle{outline:2px solid var(--orange);outline-offset:3px;box-shadow:0 0 12px rgba(249,115,22,0.5)!important;}
@@ -486,15 +488,6 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .brainstorm-run { background: var(--orange); color: white; font-weight: bold; font-family: inherit; border: none; padding: 6px 8px; font-size: 11px; cursor: pointer; border-radius: 6px; transition: opacity 0.2s; }
 .brainstorm-run:hover { opacity: 0.8; }
 
-.node-file-wrap {
-  background: var(--surface2); border: 1px dashed var(--muted);
-  border-radius: 8px; padding: 12px; width: 180px; cursor: pointer;
-  transition: all 0.2s;
-}
-.node-file-wrap:hover { border-color: var(--accent); }
-.node-file-wrap.drag-over { border-color: var(--accent); background: rgba(124,58,237,0.1); }
-.file-preview { max-width: 100%; max-height: 120px; border-radius: 4px; pointer-events: none; margin-top: 4px; }
-
 .timer-ring{position:relative;width:80px;height:80px;display:flex;align-items:center;justify-content:center;}
 .timer-ring svg{position:absolute;inset:0;transform:rotate(-90deg);}
 .ring-bg{fill:none;stroke:var(--ring-bg);stroke-width:6;}
@@ -539,20 +532,21 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   background: transparent; border: none; padding: 0; min-height: auto;
 }
 .suggestion-btn{
-  background: rgba(20, 20, 28, 0.8); backdrop-filter: blur(8px);
-  border: 1px solid var(--border2); border-radius: 20px;
+  background: var(--glass-bg); backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 20px;
   padding: 6px 14px; font-size: 11px; color:var(--text); cursor:pointer;
   transition:all .15s; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
 }
 .suggestion-btn:hover{border-color:var(--accent);color:var(--text);box-shadow:0 0 8px var(--accent-soft);}
 
 #input-bar {
   position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 12px; padding: 10px 14px;
-  background: rgba(20, 20, 28, 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--border2); border-radius: 30px;
+  display: flex; gap: 12px; padding: 12px 18px;
+  background: var(--glass-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 30px;
   width: 640px; max-width: 90vw;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(124,58,237,0.2);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.4), 0 0 0 1px rgba(124,58,237,0.2);
   z-index: 1000; align-items: flex-end;
 }
 #prompt {
@@ -563,8 +557,8 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 }
 #prompt::placeholder { color: var(--muted); }
 #send-btn {
-  width: 36px; height: 36px; border-radius: 50%; padding: 0;
-  background: var(--text); color: var(--bg); border: none;
+  width: 38px; height: 38px; border-radius: 50%; padding: 0;
+  background: var(--text); color: var(--surface); border: none;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; transition: transform 0.2s, background 0.2s, box-shadow 0.2s;
   font-size: 18px; font-weight: bold; flex-shrink: 0; margin-bottom: 2px;
@@ -572,25 +566,30 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 #send-btn:hover { transform: scale(1.05); background: var(--accent); color: white; box-shadow: 0 0 15px var(--accent-glow); }
 
 .top-btn{
-  background:var(--surface);border:1px solid var(--border2);color:var(--muted2);
-  padding:calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
-  border-radius:6px;font-family:inherit;font-size:calc(11px * var(--ui-scale));
+  background:var(--glass-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border:1px solid rgba(255,255,255,0.1); color:var(--text);
+  padding:calc(8px * var(--ui-scale)) calc(14px * var(--ui-scale));
+  border-radius:8px;font-family:inherit;font-size:calc(12px * var(--ui-scale));
   cursor:pointer; transition:all .15s;white-space:nowrap;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
 }
-.top-btn:hover{border-color:var(--accent);color:var(--text);}
+.top-btn:hover{border-color:var(--accent);color:var(--text); box-shadow: 0 4px 15px rgba(124,58,237,0.2);}
 
 #zoom-controls{
-  position:fixed;bottom:124px;right:14px;display:flex;flex-direction:column;gap:4px;z-index:200;
+  position:fixed;bottom:124px;right:14px;display:flex;flex-direction:column;gap:6px;z-index:200;
 }
 .zoom-btn{
-  background:var(--surface);border:1px solid var(--border2);color:var(--muted2);
-  width:28px;height:28px;border-radius:6px;font-family:inherit;font-size:14px;cursor:pointer;
+  background:var(--glass-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border:1px solid rgba(255,255,255,0.1); color:var(--text);
+  width:36px;height:36px;border-radius:8px;font-family:inherit;font-size:16px;cursor:pointer;
   display:flex;align-items:center;justify-content:center;transition:all .15s;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
 }
-.zoom-btn:hover{border-color:var(--accent);color:var(--text);}
+.zoom-btn:hover{border-color:var(--accent);color:var(--text);box-shadow: 0 4px 15px rgba(124,58,237,0.2);}
 #zoom-label{
-  background:var(--surface);border:1px solid var(--border2);color:var(--muted);
-  font-size:9px;border-radius:6px;text-align:center;padding:2px 0;font-family:inherit;
+  background:var(--glass-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border:1px solid rgba(255,255,255,0.1); color:var(--text);
+  font-size:10px;border-radius:8px;text-align:center;padding:4px 0;font-family:inherit;
 }
 
 #slash-popup{
@@ -694,6 +693,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   background: currentColor; color: white; font-size: 9px; padding: 2px 6px;
   border-radius: 4px; margin-left: 8px; margin-top: -4px; font-weight: bold;
   box-shadow: 0 2px 4px rgba(0,0,0,0.5); white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
 }
 </style>
 </head>
@@ -701,16 +701,15 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 <div id="app">
   <div id="top-bar">
     <button class="top-btn" id="dash-btn" title="Dashboard">🏠 Dashboard</button>
-    <div style="width: 1px; height: 16px; background: var(--border2); margin: 0 4px;"></div>
+    <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.2); margin: 0 4px;"></div>
     <input type="text" id="board-title-input" class="board-title-input" value="Untitled Canvas" />
-    <div style="width: 1px; height: 16px; background: var(--border2); margin: 0 4px;"></div>
+    <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.2); margin: 0 4px;"></div>
     
     <button class="top-btn" id="study-btn">Study</button>
     <button class="top-btn" id="auto-btn">Auto Layout</button>
     <button class="top-btn" id="group-btn">Group Nodes</button>
     <button class="top-btn" id="note-btn">Add Note</button>
     <button class="top-btn" id="brainstorm-btn">Brainstorm</button>
-    <button class="top-btn" id="drag-btn" title="Add File Node">📎 Drag</button>
     <button class="top-btn" id="settings-btn" title="Settings">⚙ Settings</button>
     
     <div id="presence-bar"></div>
@@ -732,7 +731,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 </div>
 
 <div id="zoom-controls">
-  <button class="zoom-btn" id="recenter-btn" title="Recenter view" style="font-size:11px;">⊙</button>
+  <button class="zoom-btn" id="recenter-btn" title="Recenter view" style="font-size:12px;">⊙</button>
   <button class="zoom-btn" id="zoom-in-btn">+</button>
   <div id="zoom-label">100%</div>
   <button class="zoom-btn" id="zoom-out-btn">−</button>
@@ -748,12 +747,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   </div>
 </div>
 
-<div id="ctx-menu">
-  <div class="ctx-item" id="ctx-rename">Rename group</div>
-  <div class="ctx-item" id="ctx-recolor">Change color</div>
-  <div class="ctx-item" id="ctx-collapse-toggle">Collapse group</div>
-  <div class="ctx-item danger" id="ctx-delete-group">Delete group</div>
-</div>
+<div id="ctx-menu"></div>
 
 <div id="settings-modal" class="modal-overlay">
   <div class="modal-box">
@@ -867,6 +861,7 @@ let undoStack=[], redoStack=[];
 const MAX_HISTORY=80;
 let slashActive=false, slashSelectedIndex=0;
 let ctxTargetGroupId=null;
+let ctxTargetNodeId=null;
 let pendingGroupColor="#7c3aed";
 let editingGroupId=null;
 let currentScale=1.0;
@@ -889,9 +884,9 @@ const SLASH_COMMANDS=[
 ];
 
 const THEMES = {
-  midnight: { bg:"#000000", canvas:"#000000", surface:"#080810", surface2:"#0d0d1a", border:"#141428", border2:"#1e1e3a", text:"#e8e8f0", muted:"#4a4a6a", muted2:"#6a6a8a" },
-  nord: { bg:"#2E3440", canvas:"#2E3440", surface:"#3B4252", surface2:"#434C5E", border:"#4C566A", border2:"#4C566A", text:"#ECEFF4", muted:"#D8DEE9", muted2:"#E5E9F0" },
-  light: { bg:"#f8f9fa", canvas:"#e9ecef", surface:"#ffffff", surface2:"#f8f9fa", border:"#dee2e6", border2:"#ced4da", text:"#212529", muted:"#6c757d", muted2:"#495057" }
+  midnight: { bg:"#000000", canvas:"#000000", surface:"#080810", surface2:"#0d0d1a", border:"#141428", border2:"#1e1e3a", text:"#e8e8f0", muted:"#4a4a6a", muted2:"#6a6a8a", glassBg:"rgba(8, 8, 16, 0.65)", gridColor:"rgba(255, 255, 255, 0.08)" },
+  nord: { bg:"#2E3440", canvas:"#2E3440", surface:"#3B4252", surface2:"#434C5E", border:"#4C566A", border2:"#4C566A", text:"#ECEFF4", muted:"#D8DEE9", muted2:"#E5E9F0", glassBg:"rgba(59, 66, 82, 0.65)", gridColor:"rgba(255, 255, 255, 0.1)" },
+  light: { bg:"#f8f9fa", canvas:"#e9ecef", surface:"#ffffff", surface2:"#f8f9fa", border:"#dee2e6", border2:"#ced4da", text:"#212529", muted:"#6c757d", muted2:"#495057", glassBg:"rgba(255, 255, 255, 0.7)", gridColor:"rgba(0, 0, 0, 0.1)" }
 };
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
@@ -953,6 +948,8 @@ function applyTheme(name) {
   r.style.setProperty('--text', t.text);
   r.style.setProperty('--muted', t.muted);
   r.style.setProperty('--muted2', t.muted2);
+  r.style.setProperty('--glass-bg', t.glassBg);
+  r.style.setProperty('--grid-color', t.gridColor);
 }
 
 function applyUiScale(scale) {
@@ -1263,7 +1260,7 @@ function redrawGroups(){
       const rh=document.createElement("div");rh.className="group-resize-handle"; hull.appendChild(rh);
       rh.addEventListener("mousedown",e=>{e.stopPropagation();e.preventDefault();resizingGroup=group;resizeStartX=e.clientX;resizeStartY=e.clientY;resizeStartW=group.collapsedW;resizeStartH=group.collapsedH;});
       hull.addEventListener("dblclick",e=>{e.stopPropagation();expandGroup(group.id);});
-      hull.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();ctxTargetGroupId=group.id;ctxMenu.style.cssText=`left:${e.clientX}px;top:${e.clientY}px;`;ctxMenu.classList.add("visible");document.getElementById("ctx-collapse-toggle").textContent="Expand group";});
+      hull.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();ctxTargetGroupId=group.id;ctxTargetNodeId=null;buildCtxMenu("group",e.clientX,e.clientY);});
       canvas.appendChild(hull);
       const label=document.createElement("div"); label.className="group-label collapsed-label"; label.textContent=group.name+" ("+group.nodeIds.length+")";
       label.style.cssText=`left:${cx+8}px;top:${cy+ch/2-7}px;color:${group.color};font-size:11px;`;
@@ -1280,7 +1277,7 @@ function redrawGroups(){
       groupDragNodeOffsets=group.nodeIds.map(nid=>{const n=nodes.find(x=>x.id===nid);return n?{id:nid,dx:n.x-(minX-pad),dy:n.y-(minY-pad)}:{id:nid,dx:0,dy:0};});
     });
     hull.addEventListener("click",e=>{if(e.shiftKey){e.stopPropagation();deleteGroup(group.id);}});
-    hull.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();ctxTargetGroupId=group.id;ctxMenu.style.cssText=`left:${e.clientX}px;top:${e.clientY}px;`;ctxMenu.classList.add("visible");document.getElementById("ctx-collapse-toggle").textContent="Collapse group";});
+    hull.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();ctxTargetGroupId=group.id;ctxTargetNodeId=null;buildCtxMenu("group",e.clientX,e.clientY);});
     canvas.insertBefore(hull,canvas.firstChild);
     const label=document.createElement("div"); label.className="group-label"; label.textContent=group.name;
     label.style.cssText=`left:${minX-pad+6}px;top:${minY-pad-18}px;color:${group.color};`;
@@ -1289,22 +1286,65 @@ function redrawGroups(){
 }
 
 // Context Menu / Colors
-document.getElementById("ctx-rename").onclick=()=>{
-  if(ctxTargetGroupId===null)return; const g=groups.find(x=>x.id===ctxTargetGroupId);if(!g)return; const n=prompt("Group name:",g.name);
-  if(n!==null){g.name=n.trim()||g.name;redrawGroups();saveGraph();} ctxMenu.classList.remove("visible");
-};
-document.getElementById("ctx-recolor").onclick=()=>{
-  if(ctxTargetGroupId===null)return; editingGroupId=ctxTargetGroupId; const g=groups.find(x=>x.id===ctxTargetGroupId);
-  if(g){pendingGroupColor=g.color;document.getElementById("group-name-input").value=g.name;} buildColorSwatches();
-  colorPickerPopup.style.cssText=`top:${parseInt(ctxMenu.style.top)+30}px;left:${ctxMenu.style.left};`; colorPickerPopup.classList.add("visible"); document.getElementById("color-confirm-btn").textContent="Update Group"; ctxMenu.classList.remove("visible");
-};
-document.getElementById("ctx-collapse-toggle").onclick=()=>{
-  if(ctxTargetGroupId===null)return; const g=groups.find(x=>x.id===ctxTargetGroupId);if(!g)return;
-  if(g.collapsed)expandGroup(g.id);else collapseGroup(g.id); ctxMenu.classList.remove("visible");
-};
-document.getElementById("ctx-delete-group").onclick=()=>{if(ctxTargetGroupId!==null)deleteGroup(ctxTargetGroupId);ctxMenu.classList.remove("visible");};
+function buildCtxMenu(type, x, y) {
+    ctxMenu.innerHTML = "";
+    if (type === "group") {
+        const g = groups.find(g => g.id === ctxTargetGroupId);
+        if(!g) return;
+        ctxMenu.innerHTML += `<div class="ctx-item" id="ctx-snap">Snap to group</div>`;
+        ctxMenu.innerHTML += `<div class="ctx-item" id="ctx-rename">Rename group</div>`;
+        ctxMenu.innerHTML += `<div class="ctx-item" id="ctx-recolor">Change color</div>`;
+        ctxMenu.innerHTML += `<div class="ctx-item" id="ctx-collapse-toggle">${g.collapsed ? 'Expand group' : 'Collapse group'}</div>`;
+        ctxMenu.innerHTML += `<div class="ctx-item danger" id="ctx-delete-group">Delete group</div>`;
+    } else if (type === "node") {
+        ctxMenu.innerHTML += `<div class="ctx-item" id="ctx-snap">Snap to node</div>`;
+        ctxMenu.innerHTML += `<div class="ctx-item danger" id="ctx-delete-node">Delete node</div>`;
+    }
+    
+    ctxMenu.style.cssText = `left:${x}px;top:${y}px;`;
+    ctxMenu.classList.add("visible");
+    
+    const snapBtn = document.getElementById("ctx-snap");
+    if(snapBtn) snapBtn.onclick = () => {
+        if(ctxTargetGroupId !== null) zoomToGroup(ctxTargetGroupId);
+        if(ctxTargetNodeId !== null) {
+            const n = nodes.find(x=>x.id===ctxTargetNodeId);
+            if(n) smartRecenter(true, n.x, n.y);
+        }
+        ctxMenu.classList.remove("visible");
+    };
+    
+    const renBtn = document.getElementById("ctx-rename");
+    if(renBtn) renBtn.onclick = () => {
+        if(ctxTargetGroupId===null)return; const g=groups.find(x=>x.id===ctxTargetGroupId);if(!g)return; const n=prompt("Group name:",g.name);
+        if(n!==null){g.name=n.trim()||g.name;redrawGroups();saveGraph();} ctxMenu.classList.remove("visible");
+    };
+    
+    const recBtn = document.getElementById("ctx-recolor");
+    if(recBtn) recBtn.onclick = () => {
+        if(ctxTargetGroupId===null)return; editingGroupId=ctxTargetGroupId; const g=groups.find(x=>x.id===ctxTargetGroupId);
+        if(g){pendingGroupColor=g.color;document.getElementById("group-name-input").value=g.name;} buildColorSwatches();
+        colorPickerPopup.style.cssText=`top:${parseInt(ctxMenu.style.top)+30}px;left:${ctxMenu.style.left};`; colorPickerPopup.classList.add("visible"); document.getElementById("color-confirm-btn").textContent="Update Group"; ctxMenu.classList.remove("visible");
+    };
+    
+    const colBtn = document.getElementById("ctx-collapse-toggle");
+    if(colBtn) colBtn.onclick = () => {
+        if(ctxTargetGroupId===null)return; const g=groups.find(x=>x.id===ctxTargetGroupId);if(!g)return;
+        if(g.collapsed)expandGroup(g.id);else collapseGroup(g.id); ctxMenu.classList.remove("visible");
+    };
+    
+    const delGrpBtn = document.getElementById("ctx-delete-group");
+    if(delGrpBtn) delGrpBtn.onclick = () => {if(ctxTargetGroupId!==null)deleteGroup(ctxTargetGroupId);ctxMenu.classList.remove("visible");};
+    
+    const delNodeBtn = document.getElementById("ctx-delete-node");
+    if(delNodeBtn) delNodeBtn.onclick = () => {
+        if(ctxTargetNodeId !== null) deleteNode(ctxTargetNodeId);
+        ctxMenu.classList.remove("visible");
+    };
+}
+
 document.addEventListener("click",e=>{if(!ctxMenu.contains(e.target))ctxMenu.classList.remove("visible");});
-document.addEventListener("contextmenu",e=>{if(!e.target.closest(".group-hull"))ctxMenu.classList.remove("visible");});
+document.addEventListener("contextmenu",e=>{if(!e.target.closest(".group-hull") && !e.target.closest(".node"))ctxMenu.classList.remove("visible");});
 
 function buildColorSwatches(){
   const c=document.getElementById("color-swatches");c.innerHTML="";
@@ -1336,36 +1376,6 @@ function triggerGroupUI() {
   colorPickerPopup.style.cssText=`top:${Math.max(20, screenY)}px;left:${Math.max(20, screenX)}px;`; colorPickerPopup.classList.add("visible");
 }
 document.getElementById("group-btn").onclick=triggerGroupUI;
-
-// File Upload Handling
-function handleFileUpload(file, node, wrap) {
-  if(!file) return;
-  if(file.size > 2 * 1024 * 1024) { alert("File is too large. Keep it under 2MB to keep syncing fast."); return; }
-  
-  node.meta.fileName = file.name;
-  node.meta.fileType = file.type;
-  
-  const processResult = (dataUrl, textContent) => {
-      node.meta.fileData = dataUrl;
-      if(textContent) node.text = textContent;
-      saveGraph();
-      const el = getNodeEl(node.id);
-      if(el) { el.remove(); createNodeElement(node); redrawLinks(); redrawGroups(); }
-  };
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-      const dataUrl = e.target.result;
-      if(file.type.startsWith("text/") || file.name.endsWith(".md") || file.name.endsWith(".json") || file.name.endsWith(".csv")) {
-          const txtReader = new FileReader();
-          txtReader.onload = (e2) => processResult(dataUrl, e2.target.result);
-          txtReader.readAsText(file);
-      } else {
-          processResult(dataUrl, `[File Reference: ${file.name}]`);
-      }
-  };
-  reader.readAsDataURL(file);
-}
 
 // Timer
 function createTimerContent(node){
@@ -1414,7 +1424,7 @@ function updateNodeTextDOM(node) {
         const t = el.querySelector(".node-text");
         if(t) t.textContent = node.text;
     }
-  } else if (node.type !== "file") {
+  } else {
     const t = el.querySelector(".node-text");
     if(t) t.textContent = node.text;
   }
@@ -1424,6 +1434,20 @@ function handleNodeInputBroadcast(node) {
   if (socket) {
       socket.emit("node_text", { room: SHARE_ID, id: node.id, text: node.text, title: node.meta.title, topic: node.meta.topic });
   }
+}
+
+function renderBrainstormTree(nodeData, parentNodeId, x, y, level) {
+    if (!nodeData || !nodeData.topic) return;
+    const n = addNode(nodeData.topic, "answer", x, y);
+    addLink(parentNodeId, n.id);
+    if (nodeData.children && nodeData.children.length > 0) {
+        const count = nodeData.children.length;
+        const spacingY = Math.max(80, 160 / level);
+        let startY = y - ((count - 1) * spacingY) / 2;
+        nodeData.children.forEach((child, i) => {
+            renderBrainstormTree(child, n.id, x + 340, startY + i * spacingY, level + 1);
+        });
+    }
 }
 
 function createNodeElement(node){
@@ -1463,32 +1487,20 @@ function createNodeElement(node){
       e.stopPropagation(); if(!input.value.trim())return; runBtn.textContent="Running...";
       try {
         const r=await fetch("/brainstorm",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:input.value})});
-        const d=await r.json(); const ideas=d.nodes||[]; const total = ideas.length; const startY = node.y - ((total-1) * 70) / 2;
-        ideas.forEach((idea, i)=>{ const n=addNode(idea,"answer",node.x+320, startY + i*100); addLink(node.id,n.id); }); saveGraph();
+        const d=await r.json(); 
+        if (d.tree && d.tree.children) {
+            const count = d.tree.children.length;
+            const spacingY = 160;
+            let startY = node.y - ((count - 1) * spacingY) / 2;
+            d.tree.children.forEach((child, i) => {
+                renderBrainstormTree(child, node.id, node.x + 340, startY + i * spacingY, 1);
+            });
+            saveGraph();
+        }
       } catch(err){}
       runBtn.textContent="Run";
     };
     wrap.appendChild(input);wrap.appendChild(runBtn); textWrap.appendChild(wrap);
-  } else if (node.type === "file") {
-    const wrap = document.createElement("div"); wrap.className = "node-file-wrap";
-    if (node.meta.fileName) {
-        wrap.innerHTML = `<div style="font-size:11px;font-weight:bold;word-break:break-all;margin-bottom:4px;">📄 ${node.meta.fileName}</div>`;
-        if (node.meta.fileData && node.meta.fileType && node.meta.fileType.startsWith("image/")) {
-            wrap.innerHTML += `<img src="${node.meta.fileData}" class="file-preview" draggable="false"/>`;
-        }
-    } else {
-        wrap.innerHTML = `
-            <div style="font-size:11px;text-align:center;pointer-events:none;color:var(--muted);">Drop file here or click</div>
-            <input type="file" style="display:none;"/>
-        `;
-        const fileInput = wrap.querySelector("input");
-        wrap.onclick = (e) => { e.stopPropagation(); fileInput.click(); };
-        fileInput.onchange = (e) => { e.stopPropagation(); handleFileUpload(e.target.files[0], node, wrap); };
-        wrap.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); wrap.classList.add("drag-over"); };
-        wrap.ondragleave = (e) => { e.preventDefault(); e.stopPropagation(); wrap.classList.remove("drag-over"); };
-        wrap.ondrop = (e) => { e.preventDefault(); e.stopPropagation(); wrap.classList.remove("drag-over"); if(e.dataTransfer.files.length) handleFileUpload(e.dataTransfer.files[0], node, wrap); };
-    }
-    textWrap.appendChild(wrap);
   } else { 
     // Expandable content box for standard questions/text
     const box = document.createElement("div"); box.className = "content-box"; box.textContent = node.text;
@@ -1528,6 +1540,13 @@ function createNodeElement(node){
     if(e.target.classList.contains("group-resize-handle") || e.target.classList.contains("expand-btn")) return;
     e.stopPropagation(); draggingNode=node; const cc=clientToCanvas(e.clientX,e.clientY); dragOffset={x:cc.x-node.x,y:cc.y-node.y};
   });
+  
+  el.addEventListener("contextmenu", e => {
+      if(e.shiftKey) return;
+      e.preventDefault(); e.stopPropagation();
+      ctxTargetNodeId = node.id; ctxTargetGroupId = null;
+      buildCtxMenu("node", e.clientX, e.clientY);
+  });
 
   el.addEventListener("click",e=>{
     e.stopPropagation();
@@ -1542,7 +1561,7 @@ function createNodeElement(node){
 function addNode(text,type,x=ORIGIN_X,y=ORIGIN_Y,meta={}){
   pushUndo(); const node={id:nextNodeId++,x,y,type,text,selected:false,dim:0,meta,completed:false}; nodes.push(node);createNodeElement(node);
   const sel=getSelectedNodes();
-  if(sel.length>0) { sel.forEach(s=>addLink(s.id,node.id)); } else if(!explicitlyDeselected && lastNodeId!==null && type !== "file") { addLink(lastNodeId,node.id); }
+  if(sel.length>0) { sel.forEach(s=>addLink(s.id,node.id)); } else if(!explicitlyDeselected && lastNodeId!==null) { addLink(lastNodeId,node.id); }
   explicitlyDeselected=false; lastNodeId=node.id; saveGraph(); return node;
 }
 
@@ -1769,7 +1788,6 @@ function runDeleteCommand(arg){
 
 document.getElementById("note-btn").onclick=()=>{ const spawn=getSmartSpawnPos(); addNode("","note",spawn.x,spawn.y,{title:"Untitled"}); };
 document.getElementById("brainstorm-btn").onclick=()=>{ const spawn=getSmartSpawnPos(); addNode("","brainstorm",spawn.x,spawn.y,{topic:""}); };
-document.getElementById("drag-btn").onclick=()=>{ const spawn=getSmartSpawnPos(); addNode("","file",spawn.x,spawn.y); };
 
 function dimAllNodes(){nodes.forEach(n=>{n.dim=Math.min((n.dim||0)+1,4);const el=getNodeEl(n.id);if(el)applyDimClass(el,n.dim);});}
 function buildContext(){const sel=getSelectedNodes();return sel.length===0?"":sel.map(n=>n.text).join("\n---\n");}
@@ -1785,7 +1803,7 @@ async function updateSuggestions(){
 // ── Save / Load ───────────────────────────────────────────────────────────────
 function saveGraph(){
   const graphData = {
-    nodes:nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{topic:n.meta.topic||"",seconds:n.meta.seconds||0,label:n.meta.label||"",title:n.meta.title||"",w:n.meta.w||null,h:n.meta.h||null,fileName:n.meta.fileName||null,fileType:n.meta.fileType||null,fileData:n.meta.fileData||null},completed:!!n.completed,groupId:n.groupId})),
+    nodes:nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{topic:n.meta.topic||"",seconds:n.meta.seconds||0,label:n.meta.label||"",title:n.meta.title||"",w:n.meta.w||null,h:n.meta.h||null},completed:!!n.completed,groupId:n.groupId})),
     links:links.map(l=>({id:l.id,sourceId:l.sourceId,targetId:l.targetId})),
     groups:groups.map(g=>({id:g.id,name:g.name,color:g.color,nodeIds:[...g.nodeIds],collapsed:!!g.collapsed,collapsedW:g.collapsedW||160,collapsedH:g.collapsedH||60,collapsedX:g.collapsedX,collapsedY:g.collapsedY,savedPositions:g.savedPositions})),
     nextNodeId,nextLinkId,nextGroupId
@@ -1816,11 +1834,12 @@ async function sendPrompt(){
   if(raw.startsWith("/delete")){runDeleteCommand(raw.slice(7));promptEl.value="";return;}
   dimAllNodes(); const cls=await classifyInput(raw); const ctx=buildContext(); const spawn=getSmartSpawnPos();
   if(cls.type==="timer"&&cls.seconds){ const n=addNode("timer "+cls.seconds+"s","timer",spawn.x,spawn.y,{seconds:cls.seconds,label:"timer"}); startTimer(n);promptEl.value="";saveGraph();updateSuggestionsDebounced();return; }
-  if(cls.type==="ai_command"){ const r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:raw,context:ctx})}); const d=await r.json();addNode(d.reply||"","answer",spawn.x,spawn.y); promptEl.value="";saveGraph();updateSuggestionsDebounced();return; }
+  if(cls.type==="ai_command"){ const r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:raw,context:ctx})}); const d=await r.json();addNode(d.reply||"","answer",spawn.x,spawn.y); promptEl.value="";saveGraph();updateSuggestionsDebounced(); smartRecenter(true, spawn.x + 100, spawn.y); return; }
   const qn=addNode(raw,"question",spawn.x,spawn.y); lastQuestionNodeId=qn.id;
   const r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:raw,context:ctx})}); const d=await r.json();
   const an=addNode(d.reply||"","answer",spawn.x+340,spawn.y); addLink(qn.id,an.id); an.selected=true; const anel=getNodeEl(an.id);if(anel)anel.classList.add("selected");
   hasActiveContext=true; redrawLinks();promptEl.value="";saveGraph();updateSuggestionsDebounced();
+  smartRecenter(true, spawn.x + 170, spawn.y);
 }
 document.getElementById("send-btn").onclick=sendPrompt;
 document.getElementById("study-btn").onclick=async()=>{
@@ -1862,8 +1881,13 @@ document.getElementById("dash-btn").onclick = async () => {
       d.shared_with_me.forEach(item => {
         const row = document.createElement("div"); row.className = "dash-item";
         const dateStr = item.added_at ? item.added_at.split('T')[0] : 'Recently';
-        row.innerHTML = `<div><strong>${item.title}</strong> (${item.owner_email})<br><span style="color:var(--muted2);font-size:10px;">Added: ${dateStr}</span></div><span style="color:var(--accent);">Go →</span>`;
-        row.onclick = () => window.location.href = "/b/" + item.share_id;
+        row.innerHTML = `
+          <div style="flex:1;"><strong>${item.title}</strong> (${item.owner_email})<br><span style="color:var(--muted2);font-size:10px;">Added: ${dateStr}</span></div>
+          <div style="display:flex;align-items:center;">
+            <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:4px 8px;font-size:10px;margin-right:8px;">Go →</button>
+            <button class="dash-delete-btn" onclick="leaveCanvas('${item.share_id}', '${currentUserEmail}', event)" title="Leave Canvas">🚪</button>
+          </div>
+        `;
         sharedList.appendChild(row);
       });
     } else { sharedList.innerHTML = "<div style='color:var(--muted2); font-size:11px; padding:12px;'>No graphs shared with you yet.</div>"; }
@@ -1881,6 +1905,20 @@ window.deleteCanvas = async function(share_id, event) {
       if(d.ok) document.getElementById("dash-btn").click();
       else alert(d.error || "Failed to delete");
   } catch(e) { alert("Error deleting"); }
+};
+
+window.leaveCanvas = async function(share_id, email, event) {
+  event.stopPropagation();
+  if(!confirm("Are you sure you want to leave this canvas?")) return;
+  try {
+      const res = await fetch("/share/remove", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ share_id: share_id, email: email })
+      });
+      const d = await res.json();
+      if (d.ok) document.getElementById("dash-btn").click();
+      else alert(d.error || "Failed to leave");
+  } catch(e) { alert("Error leaving"); }
 };
 
 document.getElementById("new-canvas-btn").onclick = async () => {
@@ -1995,7 +2033,7 @@ socket.on("graph_sync", (graphData) => {
        const isEditing = document.activeElement && document.activeElement.closest(`.node[data-id="${exist.id}"]`);
        
        let structuralChange = false;
-       if (exist.type !== inNode.type || exist.groupId !== inNode.groupId || exist.meta.fileData !== inNode.meta.fileData) {
+       if (exist.type !== inNode.type || exist.groupId !== inNode.groupId) {
            structuralChange = true;
        }
 
@@ -2189,18 +2227,24 @@ def brainstorm():
     d = request.get_json()
     topic = d.get("topic", "")
     sys = ('You are a brainstorm assistant. Analyze the topic and branch out conceptually. '
-           'Generate necessary, highly related subtopics. The number of subtopics should fit the complexity '
-           'of the topic (between 2 and 8). Return ONLY a valid JSON array of strings. Do not include markdown formatting. '
-           'Example output: ["Subtopic A", "Subtopic B", "Subtopic C"]')
+           'Generate a multi-level structure. Return ONLY a valid JSON object representing a tree. '
+           'Format: {"topic": "Root idea", "children": [{"topic": "Sub idea 1", "children": [...]}, ...]} '
+           'Go 2 levels deep, max 3-4 children per level. No markdown formatting.')
     try:
         raw = call_groq([{"role": "system", "content": sys}, {"role": "user", "content": topic}])
         clean = raw.strip().strip("```json").strip("```").strip()
-        nodes = json.loads(clean)
-        if isinstance(nodes, list):
-            return jsonify({"nodes": nodes})
+        tree = json.loads(clean)
+        if isinstance(tree, dict) and "topic" in tree:
+            return jsonify({"tree": tree})
     except Exception as e:
         pass
-    return jsonify({"nodes": [f"{topic} idea 1", f"{topic} idea 2", f"{topic} idea 3"]})
+    
+    # Fallback structure
+    return jsonify({"tree": {"topic": topic, "children": [
+        {"topic": f"{topic} concept 1", "children": []},
+        {"topic": f"{topic} concept 2", "children": []},
+        {"topic": f"{topic} concept 3", "children": []}
+    ]}})
 
 @app.route("/save_settings", methods=["POST"])
 def save_settings():
@@ -2282,7 +2326,26 @@ def board(share_id):
     if not graph:
         cursor.close()
         conn.close()
-        return "Canvas not found.", 404
+        error_html = """<!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Canvas Not Found</title>
+            <style>
+                body { background: #000; color: #fff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                h2 { color: #fff; font-size: 24px; margin-bottom: 10px; }
+                p { color: #6a6a8a; font-size: 14px; margin-bottom: 30px; }
+                a { color: #fff; text-decoration: none; border: 1px solid rgba(124,58,237,0.5); background: rgba(124,58,237,0.1); padding: 10px 20px; border-radius: 8px; transition: all 0.2s; box-shadow: 0 0 15px rgba(124,58,237,0.2); }
+                a:hover { background: #7c3aed; box-shadow: 0 0 25px rgba(124,58,237,0.4); }
+            </style>
+        </head>
+        <body>
+            <h2>Canvas Not Found</h2>
+            <p>This canvas may have been deleted, or the URL is incorrect.</p>
+            <a href="/">← Go to Dashboard</a>
+        </body>
+        </html>"""
+        return Response(error_html, mimetype="text/html"), 404
         
     is_owner = (graph["user_id"] == session["user_id"])
     if not is_owner:
@@ -2290,7 +2353,26 @@ def board(share_id):
         if not cursor.fetchone():
             cursor.close()
             conn.close()
-            return "You do not have access to this canvas. Ask the owner to invite you.", 403
+            error_html = """<!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <title>Access Denied</title>
+                <style>
+                    body { background: #000; color: #fff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                    h2 { color: #fff; font-size: 24px; margin-bottom: 10px; }
+                    p { color: #6a6a8a; font-size: 14px; margin-bottom: 30px; }
+                    a { color: #fff; text-decoration: none; border: 1px solid rgba(124,58,237,0.5); background: rgba(124,58,237,0.1); padding: 10px 20px; border-radius: 8px; transition: all 0.2s; box-shadow: 0 0 15px rgba(124,58,237,0.2); }
+                    a:hover { background: #7c3aed; box-shadow: 0 0 25px rgba(124,58,237,0.4); }
+                </style>
+            </head>
+            <body>
+                <h2>Access Denied</h2>
+                <p>You do not have access to this canvas. Ask the owner to invite you.</p>
+                <a href="/">← Go to Dashboard</a>
+            </body>
+            </html>"""
+            return Response(error_html, mimetype="text/html"), 403
             
     cursor.close()
     conn.close()
@@ -2468,18 +2550,25 @@ def remove_collaborator():
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id FROM graphs WHERE share_id=%s AND user_id=%s", (share_id, session["user_id"]))
+        cursor.execute("SELECT id, user_id FROM graphs WHERE share_id=%s", (share_id,))
         graph = cursor.fetchone()
-        if not graph: return jsonify({"error": "Only the canvas owner can remove collaborators."})
+        if not graph: return jsonify({"error": "Canvas not found."})
         
         cursor.execute("SELECT id FROM users WHERE email=%s", (email,))
-        user = cursor.fetchone()
-        if user:
-            cursor.execute("DELETE FROM graph_collaborators WHERE graph_id=%s AND user_id=%s", (graph["id"], user["id"]))
-            conn.commit()
+        target_user = cursor.fetchone()
+        if not target_user: return jsonify({"error": "User not found."})
+        
+        is_owner = (graph["user_id"] == session["user_id"])
+        is_self = (target_user["id"] == session["user_id"])
+        
+        if not (is_owner or is_self):
+            return jsonify({"error": "Only the canvas owner can remove other collaborators."})
             
-            # Emit socket event instantly kicking them out of the frontend board
-            socketio.emit("collab_removed", {"email": email}, to=share_id)
+        cursor.execute("DELETE FROM graph_collaborators WHERE graph_id=%s AND user_id=%s", (graph["id"], target_user["id"]))
+        conn.commit()
+        
+        # Emit socket event instantly kicking them out of the frontend board
+        socketio.emit("collab_removed", {"email": email}, to=share_id)
             
         return jsonify({"ok": True})
     finally:
