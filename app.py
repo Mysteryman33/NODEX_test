@@ -352,6 +352,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
   --orange:#f97316;
   --purple:#a78bfa;
   --purple-glow:rgba(167,139,250,0.35);
+  --red:#ef4444;
+  --red-glow:rgba(239, 68, 68, 0.4);
 
   --node-q:#c4b5fd;
   --node-a:#6ee7b7;
@@ -440,6 +442,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   flex-shrink:0;transition:box-shadow .2s,transform .2s;
 }
 .node-text{position:relative; white-space:pre-wrap;color:var(--text);transition:opacity .2s ease;}
+.node-time { position: absolute; bottom: -16px; left: 0; font-size: 9px; color: var(--muted2); white-space: nowrap; pointer-events: none;}
 
 .dim-0 .node-text{opacity:1;}.dim-1 .node-text{opacity:.75;}
 .dim-2 .node-text{opacity:.55;}.dim-3 .node-text{opacity:.35;}.dim-4 .node-text{opacity:.18;}
@@ -467,9 +470,9 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .node.ctrl-highlight .node-circle{outline:2px solid var(--orange);outline-offset:3px;box-shadow:0 0 12px rgba(249,115,22,0.5)!important;}
 .node.find-focus .node-circle{box-shadow:0 0 0 3px var(--accent),0 0 24px var(--accent-glow)!important;animation:find-pulse 1s ease-in-out 3;}
 
-/* Pinned Highlight Styles */
-.pinned-highlight .node-circle { box-shadow: 0 0 0 4px var(--purple), 0 0 20px var(--purple-glow) !important; transform: scale(1.4); }
-.group-hull.pinned-highlight { border-width: 3px !important; border-color: var(--purple) !important; box-shadow: 0 0 30px var(--purple-glow) !important; z-index: 10; }
+/* Pinned Highlight Styles (Solid RED) */
+.pinned-highlight .node-circle { box-shadow: 0 0 0 4px var(--red), 0 0 20px var(--red-glow) !important; transform: scale(1.4); }
+.group-hull.pinned-highlight { border-width: 3px !important; border-color: var(--red) !important; border-style: solid !important; background: rgba(239, 68, 68, 0.05) !important; opacity: 1 !important; box-shadow: 0 0 30px var(--red-glow) !important; z-index: 10; }
 
 @keyframes find-pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.4);}}
 
@@ -485,9 +488,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .copy-btn{
   background:var(--surface);border:1px solid var(--border2);color:var(--muted2);
   font-size:10px;padding:2px 6px;border-radius:999px;cursor:pointer;
-  font-family:inherit;transition:all .15s;
+  font-family:inherit;transition:all .15s; display: flex; align-items: center; gap: 4px;
 }
 .copy-btn:hover{border-color:var(--accent);color:var(--text);}
+.copy-btn svg { width: 10px; height: 10px; }
 
 .note-wrap{display:flex;flex-direction:column;gap:4px; position:relative;}
 .note-title{
@@ -610,20 +614,27 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 /* Chat Window */
 #chat-window { 
-  position:fixed; right:20px; bottom:100px; width:300px; height:400px; 
+  position:fixed; width:300px; height:400px; min-width: 250px; min-height: 300px;
   background:var(--glass-bg); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); 
   border:1px solid rgba(255,255,255,0.1); border-radius:16px; display:none; 
   flex-direction:column; z-index:2000; box-shadow: 0 10px 40px rgba(0,0,0,0.5); resize: both; overflow: hidden; 
 }
 #chat-window.visible { display:flex; }
-.chat-header { padding: 12px; border-bottom: 1px solid var(--border2); font-weight: bold; display:flex; justify-content: space-between; align-items:center; font-size: 13px; }
-#chat-close { background:transparent; border:none; color:var(--text); cursor:pointer; font-size:16px; transition: color 0.2s; }
+.chat-header { padding: 12px; border-bottom: 1px solid var(--border2); font-weight: bold; display:flex; justify-content: space-between; align-items:center; font-size: 13px; cursor: move; user-select: none; }
+#chat-close { background:transparent; border:none; color:var(--text); cursor:pointer; font-size:16px; transition: color 0.2s; padding: 0 4px; }
 #chat-close:hover { color: var(--red); }
 .chat-messages { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
-.chat-msg { background:var(--surface2); padding:8px; border-radius:8px; font-size:11px; word-wrap:break-word; border: 1px solid var(--border2); }
-.chat-msg .sender { font-weight:bold; color:var(--accent); margin-bottom:2px; font-size:10px; }
-.chat-msg .node-ref { display:inline-block; background:rgba(124,58,237,0.2); border:1px solid var(--accent); padding:2px 6px; border-radius:4px; margin-bottom:4px; cursor:pointer; color:var(--text); text-decoration:none; font-size: 9px; }
-.chat-msg .node-ref:hover { background:rgba(124,58,237,0.4); }
+.chat-msg { padding:8px 10px; border-radius:12px; font-size:11px; word-wrap:break-word; max-width: 85%; position: relative;}
+.chat-msg.sent { align-self: flex-end; background: var(--accent); color: white; border-bottom-right-radius: 4px; }
+.chat-msg.received { align-self: flex-start; background: var(--surface2); border: 1px solid var(--border2); color: var(--text); border-bottom-left-radius: 4px; }
+.chat-msg .sender { font-weight:bold; font-size:9px; opacity: 0.8; margin-bottom: 2px; }
+.chat-msg.sent .sender { text-align: right; }
+.chat-msg .timestamp { font-size: 8px; opacity: 0.6; margin-top: 4px; text-align: right; display: block; }
+.chat-msg .node-ref { display:inline-block; background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.3); padding:2px 6px; border-radius:4px; margin-bottom:4px; cursor:pointer; color:inherit; text-decoration:none; font-size: 9px; transition: background 0.2s; }
+.chat-msg .node-ref:hover { background:rgba(255,255,255,0.25); }
+.chat-msg .delete-msg { position: absolute; top: 4px; right: 4px; background: transparent; border: none; color: inherit; opacity: 0; font-size: 10px; cursor: pointer; transition: opacity 0.2s; }
+.chat-msg:hover .delete-msg { opacity: 0.6; }
+.chat-msg .delete-msg:hover { opacity: 1; }
 .chat-input-wrap { display:flex; border-top:1px solid var(--border2); padding:8px; background:rgba(0,0,0,0.2); gap: 6px; }
 #chat-input { flex:1; background:transparent; border:none; color:var(--text); outline:none; font-family:inherit; font-size:11px; }
 #chat-send { background:var(--accent); border:none; color:white; border-radius:50%; width:28px; height:28px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink: 0;}
@@ -683,7 +694,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 /* Modals */
 .modal-overlay {
-  position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:2000;
+  position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:3000;
   display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
 }
 .modal-overlay.visible{display:flex;}
@@ -704,7 +715,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   font-family:inherit;font-size:calc(11px * var(--ui-scale));
   padding:calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale));
   border-radius:8px;cursor:pointer;
-  transition:all .15s; align-self: flex-end; font-weight: bold;
+  transition:all .15s; align-self: flex-end; font-weight: bold; display: flex; align-items: center; gap: 6px;
 }
 .modal-close:hover{border-color:var(--accent);}
 .modal-btn.primary { background: var(--accent); color: white; border: none; box-shadow: 0 0 10px var(--accent-glow); }
@@ -750,6 +761,28 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   text-shadow: 0 1px 3px rgba(0,0,0,0.8);
 }
 
+/* Tutorial Overlay */
+#tutorial-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 5000;
+  display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px);
+}
+#tutorial-overlay.visible { display: flex; }
+.tut-box {
+  background: var(--surface); border: 1px solid var(--accent); border-radius: 16px;
+  padding: 30px; width: 400px; max-width: 90vw; text-align: center;
+  box-shadow: 0 0 60px rgba(124,58,237,0.3); position: relative;
+}
+.tut-title { font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; }
+.tut-desc { font-size: 13px; color: var(--muted); margin-bottom: 24px; line-height: 1.5; }
+.tut-dots { display: flex; justify-content: center; gap: 8px; margin-bottom: 24px; }
+.tut-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border2); transition: background 0.3s; }
+.tut-dot.active { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+.tut-btn-row { display: flex; justify-content: space-between; }
+.tut-skip { background: transparent; border: none; color: var(--muted2); cursor: pointer; font-family: inherit; font-size: 12px; transition: color 0.2s; }
+.tut-skip:hover { color: white; }
+.tut-next { background: var(--accent); border: none; color: white; padding: 8px 16px; border-radius: 8px; font-weight: bold; cursor: pointer; font-family: inherit; box-shadow: 0 0 10px var(--accent-glow); }
+.tut-next:hover { background: var(--accent2); }
+
 /* Mobile Responsiveness */
 @media (max-width: 768px) {
   #top-bar {
@@ -768,7 +801,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   }
   .suggestion-btn { flex-shrink: 0; }
   #chat-window {
-      width: calc(100vw - 32px); right: 16px; height: 350px; bottom: 80px;
+      width: calc(100vw - 32px); right: 16px; height: 350px; bottom: 80px; left: 16px !important; top: auto !important;
   }
 }
 </style>
@@ -782,8 +815,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
     <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.2); margin: 0 4px; flex-shrink:0;"></div>
     
     <input type="text" id="board-title-input" class="board-title-input" value="Untitled Canvas" />
-    <div id="sync-indicator" title="Sync Status" style="display:flex; align-items:center; margin-left: 4px; flex-shrink:0;">
-      </div>
+    <div id="sync-indicator" title="Sync Status" style="display:flex; align-items:center; margin-left: 4px; flex-shrink:0;"></div>
 
     <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.2); margin: 0 4px; flex-shrink:0;"></div>
     
@@ -807,6 +839,9 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
     </button>
     <button class="top-btn" id="chat-btn" style="display:none;">
       <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Chat
+    </button>
+    <button class="top-btn btn-guest" id="exit-guest-btn" style="display:none;" onclick="window.location.href='/auth/logout'">
+        <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg> Exit Guest
     </button>
     
     <div id="presence-bar"></div>
@@ -900,7 +935,9 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
       <div class="settings-label">Share via link</div>
       <div class="share-input-wrap">
         <input type="text" id="share-link-input" class="modal-input" readonly/>
-        <button class="modal-btn primary" id="share-copy-btn">Copy</button>
+        <button class="modal-btn primary" id="share-copy-btn">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy
+        </button>
       </div>
     </div>
     <div style="height: 1px; background: var(--border2); margin: 8px 0;"></div>
@@ -921,7 +958,12 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 <div id="dash-modal" class="modal-overlay">
   <div class="modal-box" style="width: 500px; max-width: 90vw;">
-    <div class="modal-title"><span>Canvas Dashboard</span> <a href="/auth/logout" style="font-size:12px; color:var(--red); text-decoration:none; display:flex; align-items:center;">🚪 Sign Out</a></div>
+    <div class="modal-title">
+        <span>Canvas Dashboard</span> 
+        <a href="/auth/logout" style="font-size:12px; color:var(--red); text-decoration:none; display:flex; align-items:center; gap: 4px;">
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg> Sign Out
+        </a>
+    </div>
     
     <div class="settings-row">
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -941,12 +983,30 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   </div>
 </div>
 
+<div id="tutorial-overlay">
+    <div class="tut-box">
+        <div class="tut-title" id="tut-title">Welcome to SecondBrain!</div>
+        <div class="tut-desc" id="tut-desc">Let's take a quick 1-minute tour to help you get started with your new knowledge graph.</div>
+        <div class="tut-dots" id="tut-dots">
+            <div class="tut-dot active"></div><div class="tut-dot"></div><div class="tut-dot"></div><div class="tut-dot"></div>
+        </div>
+        <div class="tut-btn-row">
+            <button class="tut-skip" onclick="endTutorial()">Skip</button>
+            <button class="tut-next" id="tut-next-btn" onclick="nextTutorialStep()">Next Step →</button>
+        </div>
+    </div>
+</div>
+
 <script>
 // Injection points from Flask
 const IS_SHARED = true;
 const SHARE_ID = '$$SHARE_ID$$';
 const IS_OWNER = $$IS_OWNER$$;
 const BOARD_TITLE = '$$BOARD_TITLE$$';
+
+if(SHARE_ID === 'guest') {
+    document.getElementById("exit-guest-btn").style.display = "flex";
+}
 
 let socket = null;
 if (SHARE_ID !== 'guest') {
@@ -1006,6 +1066,9 @@ const THEMES = {
 const syncSvgSynced = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
 const syncSvgSyncing = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>`;
 const syncSvgOffline = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3M1 1l22 22"/></svg>`;
+const iconGo = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>`;
+const iconTrash = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+const iconDoor = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>`;
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
 const canvasWrapper=document.getElementById("canvas-wrapper");
@@ -1125,19 +1188,50 @@ async function loadSettings() {
 }
 
 // ── Chat System ───────────────────────────────────────────────────────────────
+let chatDrag = false;
+let chatStart = {x:0, y:0};
+const chatWin = document.getElementById("chat-window");
+
+document.querySelector(".chat-header").addEventListener("mousedown", e => {
+    if(e.target.id === 'chat-close') return;
+    chatDrag = true; 
+    chatStart = {x: e.clientX - chatWin.offsetLeft, y: e.clientY - chatWin.offsetTop};
+});
+document.addEventListener("mousemove", e => {
+    if(!chatDrag) return;
+    chatWin.style.left = (e.clientX - chatStart.x) + "px";
+    chatWin.style.top = (e.clientY - chatStart.y) + "px";
+    chatWin.style.bottom = "auto"; chatWin.style.right = "auto";
+});
+document.addEventListener("mouseup", () => {
+    if(chatDrag) {
+        chatDrag = false;
+        localStorage.setItem("chat_pos", JSON.stringify({left: chatWin.style.left, top: chatWin.style.top}));
+    }
+});
+
 document.getElementById("chat-btn").onclick = () => {
-    document.getElementById("chat-window").classList.toggle("visible");
+    chatWin.classList.toggle("visible");
     setTimeout(renderChat, 50);
 };
-document.getElementById("chat-close").onclick = () => document.getElementById("chat-window").classList.remove("visible");
+document.getElementById("chat-close").onclick = () => chatWin.classList.remove("visible");
 
 function renderChat() {
     const box = document.getElementById("chat-messages");
     box.innerHTML = "";
     chatMessages.forEach(m => {
-        const div = document.createElement("div"); div.className = "chat-msg";
-        let refHtml = m.nodeRef ? `<div class="node-ref" onclick="smartRecenter(true, ${m.nodeRefX}, ${m.nodeRefY})">↳ Replying to Node</div><br>` : "";
-        div.innerHTML = `<div class="sender">${m.sender}</div>${refHtml}${m.text}`;
+        const div = document.createElement("div"); 
+        div.className = "chat-msg " + (m.sender === currentUserEmail ? "sent" : "received");
+        let refHtml = m.nodeRef ? `<div class="node-ref" onclick="smartRecenter(true, ${m.nodeRefX}, ${m.nodeRefY}); const el=getNodeEl(${m.nodeRef}); if(el){el.classList.add('find-focus'); setTimeout(()=>el.classList.remove('find-focus'),3000);}">↳ Replying to Node</div><br>` : "";
+        let delHtml = (m.sender === currentUserEmail || IS_OWNER) ? `<button class="delete-msg" onclick="deleteChatMessage(${m.id})">✕</button>` : "";
+        let timeStr = new Date(m.time || Date.now()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        
+        div.innerHTML = `
+            ${delHtml}
+            <div class="sender">${m.sender === currentUserEmail ? "You" : m.sender}</div>
+            ${refHtml}${m.text}
+            <span class="timestamp">${timeStr}</span>
+        `;
         box.appendChild(div);
     });
     box.scrollTop = box.scrollHeight;
@@ -1147,7 +1241,7 @@ function sendChat() {
     const inp = document.getElementById("chat-input");
     const text = inp.value.trim();
     if(!text) return;
-    const msg = { id: Date.now(), sender: currentUserEmail || "Guest", text: text, nodeRef: chatReplyNode?.id, nodeRefX: chatReplyNode?.x, nodeRefY: chatReplyNode?.y };
+    const msg = { id: Date.now(), sender: currentUserEmail || "Guest", text: text, time: Date.now(), nodeRef: chatReplyNode?.id, nodeRefX: chatReplyNode?.x, nodeRefY: chatReplyNode?.y };
     chatMessages.push(msg);
     renderChat();
     if(socket) socket.emit("chat_message", { room: SHARE_ID, msg: msg });
@@ -1159,16 +1253,27 @@ function sendChat() {
 document.getElementById("chat-send").onclick = sendChat;
 document.getElementById("chat-input").onkeydown = e => { if(e.key === "Enter") sendChat(); };
 
+window.deleteChatMessage = function(id) {
+    chatMessages = chatMessages.filter(m => m.id !== id);
+    renderChat();
+    if(socket) socket.emit("delete_chat_message", { room: SHARE_ID, id: id });
+    saveGraph();
+};
+
 if(socket) {
     socket.on("chat_message", data => {
         chatMessages.push(data.msg);
         renderChat();
-        if(!document.getElementById("chat-window").classList.contains("visible")) {
+        if(!chatWin.classList.contains("visible")) {
             const btn = document.getElementById("chat-btn");
             btn.style.boxShadow = "0 0 15px var(--green)";
             btn.style.borderColor = "var(--green)";
-            setTimeout(()=> { btn.style.boxShadow = ""; btn.style.borderColor = ""; }, 2000);
+            setTimeout(()=> { btn.style.boxShadow = "0 4px 12px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.05)"; btn.style.borderColor = "rgba(255, 255, 255, 0.1)"; }, 2000);
         }
+    });
+    socket.on("delete_chat_message", data => {
+        chatMessages = chatMessages.filter(m => m.id !== data.id);
+        renderChat();
     });
 }
 
@@ -1229,9 +1334,9 @@ canvasWrapper.addEventListener("wheel",e=>{
   }
 },{passive:false});
 
-function smartRecenter(animate=true, customX=null, customY=null){
+function smartRecenter(animate=true, customX=null, customY=null, customZoom=null){
   if(customX !== null && customY !== null) {
-      applyZoom(currentScale, canvasWrapper.clientWidth/2, canvasWrapper.clientHeight/2);
+      applyZoom(customZoom !== null ? customZoom : currentScale, canvasWrapper.clientWidth/2, canvasWrapper.clientHeight/2);
       setTimeout(()=>{
           canvasWrapper.scrollTo({ left: customX*currentScale - canvasWrapper.clientWidth/2, top: customY*currentScale - canvasWrapper.clientHeight/2, behavior: animate?"smooth":"instant" });
       }, 30);
@@ -1506,7 +1611,7 @@ function buildCtxMenu(type, x, y) {
         if(ctxTargetGroupId !== null) zoomToGroup(ctxTargetGroupId);
         if(ctxTargetNodeId !== null) {
             const n = nodes.find(x=>x.id===ctxTargetNodeId);
-            if(n) smartRecenter(true, n.x, n.y);
+            if(n) smartRecenter(true, n.x, n.y, 1.0);
         }
         ctxMenu.classList.remove("visible");
     };
@@ -1524,7 +1629,7 @@ function buildCtxMenu(type, x, y) {
     if(pinNodeBtn) pinNodeBtn.onclick = () => {
         if(ctxTargetNodeId !== null) {
             const n = nodes.find(x=>x.id===ctxTargetNodeId);
-            if(n) { n.meta.pinned = !n.meta.pinned; redrawGroups(); saveGraph(); }
+            if(n) { n.meta.pinned = !n.meta.pinned; redrawGroups(); const el = getNodeEl(n.id); if(n.meta.pinned) el?.classList.add("pinned-highlight"); else el?.classList.remove("pinned-highlight"); saveGraph(); }
         }
         ctxMenu.classList.remove("visible");
     };
@@ -1696,8 +1801,16 @@ function createNodeElement(node){
 
   if(node.type==="answer"){
     const bubble=document.createElement("div");bubble.className="bubble"; const header=document.createElement("div");header.className="bubble-header";
-    const copyBtn=document.createElement("button");copyBtn.className="copy-btn";copyBtn.textContent="Copy";
-    copyBtn.onclick=e=>{e.stopPropagation();navigator.clipboard.writeText(node.text||"").catch(()=>{});}; header.appendChild(copyBtn);
+    const copyBtn=document.createElement("button");copyBtn.className="copy-btn";copyBtn.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy`;
+    copyBtn.onclick=e=>{
+      e.stopPropagation();navigator.clipboard.writeText(node.text||"").catch(()=>{});
+      copyBtn.style.color = "var(--green)"; copyBtn.style.borderColor = "var(--green)";
+      copyBtn.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied`;
+      setTimeout(()=> {
+          copyBtn.style.color = ""; copyBtn.style.borderColor = "";
+          copyBtn.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy`;
+      }, 2000);
+    }; header.appendChild(copyBtn);
     const body=document.createElement("div");
     if(el.classList.contains("is-thinking")) body.innerHTML = '<div class="thinking-spinner">Thinking...</div>';
     else body.innerHTML = `<div class="markdown-body">${marked.parse(node.text||"")}</div>`;
@@ -1764,6 +1877,11 @@ function createNodeElement(node){
     }, 10);
   }
 
+  // Node timestamp append
+  const timeDiv = document.createElement("div"); timeDiv.className = "node-time";
+  timeDiv.textContent = new Date(node.meta.timestamp || Date.now()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+  textWrap.appendChild(timeDiv);
+
   if(node.type==="answer" || node.type==="note") {
     const rh = document.createElement("div"); rh.className = "group-resize-handle"; rh.style.background = "rgba(255,255,255,0.7)"; rh.style.zIndex = 20;
     let targetEl = node.type==="answer" ? textWrap.querySelector('.bubble') : textWrap.querySelector('.note-body');
@@ -1782,7 +1900,7 @@ function createNodeElement(node){
   el.addEventListener("mousedown",e=>{
     if(e.shiftKey)return;
     if((node.type==="note"||node.type==="brainstorm")&&(e.target.tagName==="TEXTAREA"||e.target.tagName==="INPUT")){if(document.activeElement===e.target)return;}
-    if(e.target.classList.contains("group-resize-handle") || e.target.classList.contains("expand-btn")) return;
+    if(e.target.classList.contains("group-resize-handle") || e.target.classList.contains("expand-btn") || e.target.closest('.copy-btn')) return;
     e.stopPropagation(); draggingNode=node; const cc=clientToCanvas(e.clientX,e.clientY); dragOffset={x:cc.x-node.x,y:cc.y-node.y};
   });
   
@@ -1794,6 +1912,7 @@ function createNodeElement(node){
   });
 
   el.addEventListener("click",e=>{
+    if(e.target.closest('.copy-btn')) return;
     e.stopPropagation();
     if(e.shiftKey && (e.ctrlKey || e.metaKey)){ e.preventDefault(); getTreeNodes(node.id).forEach(n => { n.selected = true; let nel = getNodeEl(n.id); if(nel) nel.classList.add("selected"); }); hasActiveContext=true; updateSuggestionsDebounced(); return; }
     if(e.shiftKey){
@@ -1808,7 +1927,7 @@ function createNodeElement(node){
   let touchTimer = null;
   el.addEventListener("touchstart", e => {
       if(e.touches.length > 1) return;
-      if(["TEXTAREA", "INPUT", "BUTTON"].includes(e.target.tagName)) return;
+      if(["TEXTAREA", "INPUT", "BUTTON"].includes(e.target.tagName) || e.target.closest('.copy-btn')) return;
       
       touchTimer = setTimeout(() => {
           touchTimer = null;
@@ -1834,7 +1953,8 @@ function createNodeElement(node){
 }
 
 function addNode(text,type,x=ORIGIN_X,y=ORIGIN_Y,meta={}){
-  pushUndo(); const node={id:nextNodeId++,x,y,type,text,selected:false,dim:0,meta,completed:false}; nodes.push(node);createNodeElement(node);
+  pushUndo(); meta.timestamp = Date.now();
+  const node={id:nextNodeId++,x,y,type,text,selected:false,dim:0,meta,completed:false}; nodes.push(node);createNodeElement(node);
   const sel=getSelectedNodes();
   if(sel.length>0) { sel.forEach(s=>addLink(s.id,node.id)); } else if(!explicitlyDeselected && lastNodeId!==null) { addLink(lastNodeId,node.id); }
   explicitlyDeselected=false; lastNodeId=node.id; saveGraph(); return node;
@@ -2135,7 +2255,7 @@ function saveGraph(){
   showSyncing();
   
   const graphData = {
-    nodes:nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{topic:n.meta.topic||"",seconds:n.meta.seconds||0,label:n.meta.label||"",title:n.meta.title||"",w:n.meta.w||null,h:n.meta.h||null,pinned:n.meta.pinned},completed:!!n.completed,groupId:n.groupId})),
+    nodes:nodes.map(n=>({id:n.id,x:n.x,y:n.y,type:n.type,text:n.text,dim:n.dim||0,meta:{topic:n.meta.topic||"",seconds:n.meta.seconds||0,label:n.meta.label||"",title:n.meta.title||"",w:n.meta.w||null,h:n.meta.h||null,pinned:n.meta.pinned,timestamp:n.meta.timestamp},completed:!!n.completed,groupId:n.groupId})),
     links:links.map(l=>({id:l.id,sourceId:l.sourceId,targetId:l.targetId})),
     groups:groups.map(g=>({id:g.id,name:g.name,color:g.color,pinned:g.pinned,nodeIds:[...g.nodeIds],collapsed:!!g.collapsed,collapsedW:g.collapsedW||160,collapsedH:g.collapsedH||60,collapsedX:g.collapsedX,collapsedY:g.collapsedY,savedPositions:g.savedPositions})),
     chat:chatMessages,
@@ -2213,7 +2333,39 @@ document.getElementById("study-btn").onclick=async()=>{
 };
 
 initZoom(); initCanvas(); loadSettings();
-loadGraph().then(()=>{ if(nodes.length>0||groups.some(g=>g.collapsed)){ setTimeout(()=>smartRecenter(false),100); } });
+
+// Tutorial Flow
+const tutSteps = [
+    { t: "Welcome to SecondBrain!", d: "Let's take a quick 1-minute tour to help you get started with your new knowledge graph." },
+    { t: "1. Creating Ideas", d: "Type your questions, ideas, or prompts in the bottom bar and hit Enter. The AI will generate nodes on the canvas. Type / to see useful commands." },
+    { t: "2. Connecting & Selecting", d: "Click to select a node. Shift+Click or Shift+Drag to select multiple. Press 'L' to link selected nodes together. Press 'S' to split links." },
+    { t: "3. Organizing", d: "Drag nodes to move them. Hold down to pan around. Select nodes and press 'G' to group them by color!" }
+];
+let tutCurrent = 0;
+function updateTutUI() {
+    document.getElementById("tut-title").textContent = tutSteps[tutCurrent].t;
+    document.getElementById("tut-desc").textContent = tutSteps[tutCurrent].d;
+    document.querySelectorAll(".tut-dot").forEach((d, i) => d.classList.toggle("active", i === tutCurrent));
+    document.getElementById("tut-next-btn").textContent = tutCurrent === tutSteps.length - 1 ? "Get Started" : "Next Step →";
+}
+function nextTutorialStep() {
+    if(tutCurrent < tutSteps.length - 1) { tutCurrent++; updateTutUI(); }
+    else endTutorial();
+}
+function endTutorial() {
+    document.getElementById("tutorial-overlay").classList.remove("visible");
+    localStorage.setItem("tut_completed", "true");
+}
+
+loadGraph().then(()=>{ 
+    if(nodes.length>0||groups.some(g=>g.collapsed)){ setTimeout(()=>smartRecenter(false),100); }
+    
+    // Check if tutorial should run
+    if(!localStorage.getItem("tut_completed") && nodes.length === 0) {
+        document.getElementById("tutorial-overlay").classList.add("visible");
+        updateTutUI();
+    }
+});
 
 // ── Dashboard / Multiple Canvases ─────────────────────────────────────────────
 document.getElementById("dash-btn").onclick = async () => {
@@ -2234,8 +2386,8 @@ document.getElementById("dash-btn").onclick = async () => {
         row.innerHTML = `
           <div style="flex:1;"><strong>${item.title}</strong><br><span style="color:var(--muted2);font-size:10px;">Updated: ${dateStr}</span></div>
           <div style="display:flex;align-items:center;">
-              <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:4px 8px;font-size:10px;margin-right:8px;">Go →</button>
-              <button class="dash-delete-btn" onclick="deleteCanvas('${item.share_id}', event)" title="Delete Canvas">🗑</button>
+              <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:4px 8px;font-size:10px;margin-right:8px;">${iconGo} Go</button>
+              <button class="dash-delete-btn" onclick="deleteCanvas('${item.share_id}', event)" title="Delete Canvas">${iconTrash}</button>
           </div>
         `;
         myList.appendChild(row);
@@ -2249,8 +2401,8 @@ document.getElementById("dash-btn").onclick = async () => {
         row.innerHTML = `
           <div style="flex:1;"><strong>${item.title}</strong> (${item.owner_email})<br><span style="color:var(--muted2);font-size:10px;">Added: ${dateStr}</span></div>
           <div style="display:flex;align-items:center;">
-            <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:4px 8px;font-size:10px;margin-right:8px;">Go →</button>
-            <button class="dash-delete-btn" onclick="leaveCanvas('${item.share_id}', '${currentUserEmail}', event)" title="Leave Canvas">🚪</button>
+            <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:4px 8px;font-size:10px;margin-right:8px;">${iconGo} Go</button>
+            <button class="dash-delete-btn" onclick="leaveCanvas('${item.share_id}', '${currentUserEmail}', event)" title="Leave Canvas">${iconDoor}</button>
           </div>
         `;
         sharedList.appendChild(row);
@@ -2500,7 +2652,8 @@ document.getElementById("share-copy-btn").onclick = () => {
   const input = document.getElementById("share-link-input");
   input.select(); document.execCommand("copy");
   const btn = document.getElementById("share-copy-btn");
-  btn.textContent = "Copied!"; setTimeout(()=>btn.textContent="Copy", 2000);
+  btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!`; 
+  setTimeout(()=>btn.innerHTML=`<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy`, 2000);
 };
 
 document.getElementById("invite-btn").onclick = async () => {
@@ -2559,7 +2712,7 @@ def call_groq(messages):
     return r.json()["choices"][0]["message"]["content"]
 
 def classify_with_groq(user_input):
-    sys=(f"Classify a message. Time: {datetime.now().strftime('%A %B %d %Y %H:%M PDT')}.\n"
+    sys=(f"Classify a message. Time: {(datetime.utcnow() - timedelta(hours=7)).strftime('%A %B %d %Y %H:%M PDT')}.\n"
          "Return ONLY JSON. Types: timer(+seconds), ai_command(+command), question, text.\n"
          'Examples: {"type":"timer","seconds":180} | {"type":"question"} | {"type":"text"}')
     raw=call_groq([{"role":"system","content":sys},{"role":"user","content":user_input}])
@@ -2570,7 +2723,7 @@ def classify_with_groq(user_input):
     return {"type":"question"}
 
 def chat_with_groq(prompt,context):
-    sys=(f"Concise assistant. Time: {datetime.now().strftime('%A %B %d %Y %H:%M PDT')}.\n"
+    sys=(f"Concise assistant. Time: {(datetime.utcnow() - timedelta(hours=7)).strftime('%A %B %d %Y %H:%M PDT')}.\n"
          "1-3 sentences unless asked for more. Don't mention nodes/graphs/context/internal structure.")
     msgs=[{"role":"system","content":sys}]
     if context:msgs.append({"role":"user","content":"Context:\n"+context})
@@ -2611,7 +2764,7 @@ def brainstorm():
     d = request.get_json()
     topic = d.get("topic", "")
     sys = ('You are a brainstorm assistant. Provide concise, high-quality ideas. '
-           'Limit generation: Do not spam nodes. Max 4-6 nodes total unless instructed otherwise. '
+           'Limit generation: Do not spam nodes. Max 2-3 nodes total unless instructed otherwise. Provide very concise, focused sub-topics. '
            'Format: {"topic": "Root idea", "children": [{"topic": "Sub idea 1", "children": [...]}]} '
            'Return ONLY a valid JSON object. No markdown formatting.')
     try:
@@ -2625,8 +2778,7 @@ def brainstorm():
     
     return jsonify({"tree": {"topic": topic, "children": [
         {"topic": f"{topic} concept 1", "children": []},
-        {"topic": f"{topic} concept 2", "children": []},
-        {"topic": f"{topic} concept 3", "children": []}
+        {"topic": f"{topic} concept 2", "children": []}
     ]}})
 
 @app.route("/save_settings", methods=["POST"])
@@ -3032,6 +3184,12 @@ def on_chat_message(data):
     room = data.get("room")
     if room and room != "guest":
         emit("chat_message", data, to=room, include_self=False)
+
+@socketio.on("delete_chat_message")
+def on_delete_chat_message(data):
+    room = data.get("room")
+    if room and room != "guest":
+        emit("delete_chat_message", data, to=room, include_self=False)
 
 @socketio.on("graph_update")
 def on_graph_update(data):
