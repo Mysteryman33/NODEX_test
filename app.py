@@ -5,82 +5,136 @@ import os
 import json
 import secrets
 import hashlib
+import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, Response, session, redirect, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import requests
-import psycopg2
-from psycopg2.extras import RealDictCursor
 import uuid
+
+# Conditionally import psycopg2 only if using Postgres
+DATABASE_URL = os.getenv("DATABASE_URL")
+DB_TYPE = "postgres" if DATABASE_URL else "sqlite"
+
+if DB_TYPE == "postgres":
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
 
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-# Secure your API key by pulling it from Render's environment!
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
 app.permanent_session_lifetime = timedelta(days=30)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# ── DB (Updated for PostgreSQL) ───────────────────────────────────────────────
+# ── DB Abstraction Layer (Postgres + SQLite Fallback) ─────────────────────────
 def get_db():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    return conn
+    if DB_TYPE == "postgres":
+        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    else:
+        conn = sqlite3.connect("local_fallback.db")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+def run_query(cursor, query, params=()):
+    if DB_TYPE == "sqlite":
+        cursor.execute(query.replace("%s", "?"), params)
+    else:
+        cursor.execute(query, params)
+
+def insert_returning_id(cursor, query, params=()):
+    if DB_TYPE == "sqlite":
+        clean_query = query.replace(" RETURNING id", "").replace("%s", "?")
+        cursor.execute(clean_query, params)
+        return cursor.lastrowid
+    else:
+        cursor.execute(query, params)
+        return cursor.fetchone()["id"]
 
 def init_db():
-    if not DATABASE_URL:
-        return
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS graphs (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            title TEXT DEFAULT 'Untitled Canvas',
-            data TEXT NOT NULL,
-            share_id TEXT UNIQUE,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS user_settings (
-            user_id INTEGER PRIMARY KEY,
-            settings JSONB NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-        
-        CREATE TABLE IF NOT EXISTS graph_collaborators (
-            graph_id INTEGER REFERENCES graphs(id) ON DELETE CASCADE,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (graph_id, user_id)
-        );
-    """)
+    if DB_TYPE == "postgres":
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS graphs (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                title TEXT DEFAULT 'Untitled Canvas',
+                data TEXT NOT NULL,
+                share_id TEXT UNIQUE,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                settings JSONB NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS graph_collaborators (
+                graph_id INTEGER REFERENCES graphs(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (graph_id, user_id)
+            );
+        """)
+    else:
+        cursor.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS graphs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT DEFAULT 'Untitled Canvas',
+                data TEXT NOT NULL,
+                share_id TEXT UNIQUE,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                settings TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS graph_collaborators (
+                graph_id INTEGER,
+                user_id INTEGER,
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (graph_id, user_id),
+                FOREIGN KEY (graph_id) REFERENCES graphs(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
     conn.commit()
+    
+    # Safely try altering tables if they miss newer columns
     try:
-        cursor.execute("ALTER TABLE graphs ADD COLUMN share_id TEXT UNIQUE;")
+        run_query(cursor, "ALTER TABLE graphs ADD COLUMN share_id TEXT UNIQUE;")
         conn.commit()
     except:
-        conn.rollback()
+        conn.rollback() if DB_TYPE == "postgres" else None
     try:
-        cursor.execute("ALTER TABLE graphs ADD COLUMN title TEXT DEFAULT 'Untitled Canvas';")
+        run_query(cursor, "ALTER TABLE graphs ADD COLUMN title TEXT DEFAULT 'Untitled Canvas';")
         conn.commit()
     except:
-        conn.rollback()
+        conn.rollback() if DB_TYPE == "postgres" else None
+    
     cursor.close()
     conn.close()
 
-if DATABASE_URL:
-    init_db()
+init_db()
 
 def hash_password(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
@@ -94,23 +148,23 @@ LOGIN_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 <title>SecondBrain — Sign In</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
 :root{
-  --bg:#000000;
-  --surface:#0a0a0f;
-  --border:#1a1a2e;
-  --text:#e8e8f0;
-  --muted:#4a4a6a;
-  --accent:#7c3aed;
-  --accent-glow:rgba(124,58,237,0.4);
-  --green:#10b981;
-  --red:#ef4444;
+  --bg:#F7F5F0;
+  --surface:#FFFFFF;
+  --border:#E5E0D8;
+  --text:#3E3A35;
+  --muted:#8A837A;
+  --accent:#A69076;
+  --accent-hover:#8C7761;
+  --green:#7B8A72;
+  --red:#C88A7A;
 }
 body{
   background:var(--bg);
   color:var(--text);
-  font-family:'JetBrains Mono',monospace;
+  font-family:'Outfit', system-ui, sans-serif;
   min-height:100vh;
   display:flex;
   align-items:center;
@@ -120,77 +174,70 @@ body{
 .bg-grid{
   position:fixed;inset:0;pointer-events:none;
   background-image:
-    linear-gradient(rgba(124,58,237,0.15) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(124,58,237,0.15) 1px,transparent 1px);
+    linear-gradient(rgba(166, 144, 118, 0.05) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(166, 144, 118, 0.05) 1px,transparent 1px);
   background-size:40px 40px;
-}
-.glow-orb{
-  position:fixed;width:600px;height:600px;border-radius:50%;
-  background:radial-gradient(circle,rgba(124,58,237,0.08) 0%,transparent 70%);
-  pointer-events:none;
-  top:50%;left:50%;transform:translate(-50%,-50%);
 }
 .card{
   position:relative;z-index:1;
   width:380px;
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:16px;
+  background:rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border:1px solid rgba(255, 255, 255, 0.8);
+  border-radius:24px;
   padding:40px;
-  box-shadow:0 0 60px rgba(124,58,237,0.08),0 0 0 1px rgba(124,58,237,0.1);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,1);
 }
 .logo{
-  font-size:11px;letter-spacing:.2em;text-transform:uppercase;
-  color:var(--accent);margin-bottom:8px;display:flex;align-items:center;gap:8px;
+  font-size:12px;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:12px;display:flex;align-items:center;gap:8px;
+  font-weight: 500;
 }
 .logo-dot{
-  width:6px;height:6px;border-radius:50%;background:var(--accent);
-  box-shadow:0 0 8px var(--accent-glow);
-  animation:pulse 2s ease-in-out infinite;
+  width:8px;height:8px;border-radius:50%;background:var(--accent);
 }
-@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 8px var(--accent-glow);}50%{opacity:.6;box-shadow:0 0 16px var(--accent-glow);}}
-h1{font-size:22px;font-weight:700;margin-bottom:6px;color:#fff;}
-.subtitle{font-size:11px;color:var(--muted);margin-bottom:32px;}
-.tabs{display:flex;gap:4px;margin-bottom:28px;background:#050508;border-radius:8px;padding:3px;}
-.tab{flex:1;padding:7px;font-family:inherit;font-size:11px;border:none;border-radius:6px;cursor:pointer;transition:all .2s;color:var(--muted);background:transparent;}
-.tab.active{background:var(--surface);color:var(--text);border:1px solid var(--border);box-shadow:0 0 12px rgba(124,58,237,0.15);}
+h1{font-size:26px;font-weight:600;margin-bottom:8px;color:var(--text);}
+.subtitle{font-size:13px;color:var(--muted);margin-bottom:32px; font-weight: 300;}
+.tabs{display:flex;gap:4px;margin-bottom:28px;background:rgba(0,0,0,0.03);border-radius:12px;padding:4px;}
+.tab{flex:1;padding:10px;font-family:inherit;font-size:13px;border:none;border-radius:10px;cursor:pointer;transition:all .2s;color:var(--muted);background:transparent;font-weight:500;}
+.tab.active{background:var(--surface);color:var(--text);box-shadow:0 4px 12px rgba(0,0,0,0.05);}
 .field{margin-bottom:16px;}
-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:6px;}
+label{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:8px;font-weight:500;}
 input{
-  width:100%;padding:10px 12px;
-  background:#050508;border:1px solid var(--border);
-  border-radius:8px;color:var(--text);font-family:inherit;font-size:12px;
+  width:100%;padding:12px 14px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;color:var(--text);font-family:inherit;font-size:14px;
   outline:none;transition:border-color .2s,box-shadow .2s;
 }
-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,58,237,0.12);}
-.remember{display:flex;align-items:center;gap:8px;margin-bottom:20px;cursor:pointer;}
-.remember input[type=checkbox]{width:14px;height:14px;accent-color:var(--accent);}
-.remember span{font-size:11px;color:var(--muted);}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(166, 144, 118, 0.15);}
+.remember{display:flex;align-items:center;gap:8px;margin-bottom:24px;cursor:pointer;}
+.remember input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);}
+.remember span{font-size:13px;color:var(--muted);}
 .btn{
-  width:100%;padding:11px;
-  background:var(--accent);border:none;border-radius:8px;
-  color:#fff;font-family:inherit;font-size:12px;font-weight:600;
-  cursor:pointer;transition:all .2s;letter-spacing:.04em;
-  box-shadow:0 0 20px rgba(124,58,237,0.3);
+  width:100%;padding:14px;
+  background:var(--accent);border:none;border-radius:12px;
+  color:#fff;font-family:inherit;font-size:14px;font-weight:500;
+  cursor:pointer;transition:all .2s;letter-spacing:.02em;
+  box-shadow:0 8px 16px rgba(166, 144, 118, 0.2);
   margin-bottom: 12px;
 }
-.btn:hover{background:#6d28d9;box-shadow:0 0 30px rgba(124,58,237,0.5);}
+.btn:hover{background:var(--accent-hover); transform: translateY(-1px); box-shadow:0 12px 20px rgba(166, 144, 118, 0.25);}
 .btn-guest {
   background: transparent; border: 1px solid var(--border); color: var(--text); box-shadow: none; margin-bottom: 0;
 }
-.btn-guest:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.2); box-shadow: none; }
-.msg{font-size:11px;margin-top:14px;padding:8px 12px;border-radius:6px;display:none;}
-.msg.error{background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:var(--red);}
-.msg.success{background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--green);}
+.btn-guest:hover { background: rgba(0,0,0,0.02); border-color: var(--muted); box-shadow: none; transform: none;}
+.msg{font-size:13px;margin-top:16px;padding:12px 14px;border-radius:10px;display:none;}
+.msg.error{background:rgba(200, 138, 122, 0.1);color:var(--red);}
+.msg.success{background:rgba(123, 138, 114, 0.1);color:var(--green);}
 </style>
 </head>
 <body>
 <div class="bg-grid"></div>
-<div class="glow-orb"></div>
 <div class="card">
   <div class="logo"><div class="logo-dot"></div>SecondBrain</div>
   <h1>Welcome back</h1>
-  <div class="subtitle">Your knowledge graph awaits.</div>
+  <div class="subtitle">A peaceful space for your thoughts.</div>
   <div class="tabs">
     <button class="tab active" id="tab-signin" onclick="switchTab('signin')">Sign In</button>
     <button class="tab" id="tab-signup" onclick="switchTab('signup')">Sign Up</button>
@@ -260,8 +307,7 @@ def signup():
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id", (email, hash_password(pw)))
-        user_id = cursor.fetchone()["id"]
+        user_id = insert_returning_id(cursor, "INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id", (email, hash_password(pw)))
         conn.commit()
         
         session.permanent = remember
@@ -270,7 +316,7 @@ def signup():
         
         next_url = session.pop("next_url", "/")
         return jsonify({"ok": True, "next_url": next_url})
-    except psycopg2.IntegrityError:
+    except Exception:
         conn.rollback()
         return jsonify({"error": "Email already registered."})
     finally:
@@ -286,7 +332,7 @@ def login():
     
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE email=%s AND password_hash=%s", (email, hash_password(pw)))
+    run_query(cursor, "SELECT * FROM users WHERE email=%s AND password_hash=%s", (email, hash_password(pw)))
     user = cursor.fetchone()
     cursor.close()
     conn.close()
@@ -320,87 +366,89 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap');
 :root{
   --ui-scale: 1.0;
   
-  /* Midnight Theme Base */
-  --bg:#000000;
-  --canvas-bg:#000000;
-  --surface:#080810;
-  --surface2:#0d0d1a;
-  --border:#141428;
-  --border2:#1e1e3a;
-  --text:#e8e8f0;
-  --muted:#4a4a6a;
-  --muted2:#6a6a8a;
+  /* Zen Beige/Brown Theme */
+  --bg: #F7F5F0;
+  --canvas-bg: #F7F5F0;
+  --surface: #FFFFFF;
+  --surface2: #FBFaf8;
+  --border: #E8E2D9;
+  --border2: #DCD5CB;
+  --text: #3E3A35;
+  --muted: #8A837A;
+  --muted2: #A39B8B;
   
-  --glass-bg: rgba(8, 8, 16, 0.65);
-  --grid-color: rgba(255, 255, 255, 0.08);
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --grid-color: rgba(166, 144, 118, 0.15);
 
-  /* Accent palette */
-  --accent:#7c3aed;
-  --accent2:#6d28d9;
-  --accent-glow:rgba(124,58,237,0.35);
-  --accent-soft:rgba(124,58,237,0.12);
+  /* Elegant Accent palette */
+  --accent: #A69076;
+  --accent2: #8C7761;
+  --accent-soft: rgba(166, 144, 118, 0.12);
 
-  --green:#10b981;
-  --green-glow:rgba(16,185,129,0.35);
-  --blue:#3b82f6;
-  --blue-glow:rgba(59,130,246,0.35);
-  --yellow:#f59e0b;
-  --orange:#f97316;
-  --purple:#a78bfa;
-  --purple-glow:rgba(167,139,250,0.35);
-  --red:#ef4444;
-  --red-glow:rgba(239, 68, 68, 0.4);
+  --green: #8B9982;
+  --blue: #8C9CA6;
+  --yellow: #C2B38A;
+  --orange: #C29A78;
+  --purple: #9B8C9C;
+  --red: #C88A7A;
 
-  --node-q:#c4b5fd;
-  --node-a:#6ee7b7;
-  --node-note:#93c5fd;
-  --node-timer:#fbbf24;
+  /* Muted elegant node tones */
+  --node-q: #EBE5D9;
+  --node-a: #E1D9CD;
+  --node-note: #F2EFE9;
+  --node-timer: #D8CAB8;
+  --node-brainstorm: #D4C9BD;
 
-  --ring-bg:#12121f;
-  --select-color: #C79F00;
+  --ring-bg: #EAE6DF;
+  --select-color: #A69076;
 }
 *{box-sizing:border-box;}
 body{margin:0;padding:0;background:var(--bg);color:var(--text);
-  font-family:'JetBrains Mono',ui-monospace,monospace;
-  overflow:hidden; touch-action: none;} 
+  font-family: 'Outfit', system-ui, sans-serif;
+  overflow:hidden; touch-action: none; font-weight: 400;} 
 
 #app{position:fixed;inset:0;display:flex;flex-direction:column;z-index:1;}
 
 *::-webkit-scrollbar{display:none;}
 *{-ms-overflow-style:none;scrollbar-width:none;}
 
-#top-bar{
-  position:fixed;top:12px;left:12px;z-index:200;
-  display:flex;gap:6px;align-items:center;
-  flex-wrap: wrap; pointer-events: none;
+/* Floating Pill Top Bar */
+#top-bar-container {
+  position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 200; pointer-events: none;
 }
-#top-bar > * { pointer-events: auto; }
+#top-bar{
+  display:flex;gap:8px;align-items:center;
+  background: var(--glass-bg); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  padding: 8px 12px; border-radius: 40px; border: 1px solid rgba(255,255,255,0.8);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,1);
+  pointer-events: auto;
+}
 
 .board-title-input {
   background: transparent; border: none; color: var(--text);
-  font-family: inherit; font-weight: bold; font-size: calc(14px * var(--ui-scale));
+  font-family: inherit; font-weight: 500; font-size: calc(14px * var(--ui-scale));
   outline: none; padding: calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
-  border-radius: 6px; transition: background 0.2s, box-shadow 0.2s;
-  min-width: 150px; max-width: 300px;
+  border-radius: 20px; transition: background 0.2s, box-shadow 0.2s;
+  min-width: 130px; max-width: 250px; text-align: center;
 }
 .board-title-input:hover, .board-title-input:focus {
-  background: rgba(255, 255, 255, 0.05); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+  background: rgba(0, 0, 0, 0.03); box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05);
 }
 
 .user-badge{
-  font-size:calc(10px * var(--ui-scale));color:var(--muted2);
+  font-size:calc(11px * var(--ui-scale));color:var(--muted);
   padding:calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
-  border:1px solid rgba(255,255,255,0.1);border-radius:12px;
-  background:rgba(255,255,255,0.03); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-  letter-spacing:.05em; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+  border:1px solid var(--border);border-radius:20px;
+  background:var(--surface); 
+  letter-spacing:.02em; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0;
+  font-weight: 500;
 }
 .user-badge a{color:var(--accent);text-decoration:none;}
-.user-badge a:hover{color:var(--purple);}
+.user-badge a:hover{color:var(--accent2);}
 
 #canvas-wrapper{
   flex:1;overflow:scroll;position:relative;background:var(--canvas-bg);cursor:default;
@@ -408,344 +456,353 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 #canvas{
   position:absolute;top:0;left:0;
-  background-image:
-    linear-gradient(var(--grid-color) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
-  background-size: 40px 40px;
+  background-image: radial-gradient(var(--grid-color) 1px, transparent 1px);
+  background-size: 30px 30px;
 }
 #link-layer{position:absolute;inset:0;pointer-events:auto;}
 
 #lasso-box {
   position: absolute;
-  border: 2px dashed rgba(255, 255, 255, 0.8);
-  background: rgba(124, 58, 237, 0.3);
+  border: 1px dashed var(--accent);
+  background: var(--accent-soft);
   pointer-events: none;
   z-index: 5000;
   display: none;
-  box-shadow: 0 0 20px rgba(124, 58, 237, 0.4);
+  border-radius: 8px;
 }
 
-.markdown-body { font-family: inherit; font-size: inherit; line-height: 1.4; }
+.markdown-body { font-family: inherit; font-size: inherit; line-height: 1.5; }
 .markdown-body p { margin: 0 0 8px 0; }
 .markdown-body p:last-child { margin: 0; }
-.markdown-body strong { font-weight: bold; color: var(--accent); }
+.markdown-body strong { font-weight: 600; color: var(--text); }
 .markdown-body em { font-style: italic; }
-.markdown-body code { background: rgba(255,255,255,0.1); padding: 2px 4px; border-radius: 4px; font-size: 0.9em; }
+.markdown-body code { background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 6px; font-size: 0.9em; font-family: monospace; }
 
-@keyframes pulse-think { 0% { opacity: 0.5; } 50% { opacity: 1; text-shadow: 0 0 10px var(--accent-glow); } 100% { opacity: 0.5; } }
-.thinking-spinner { animation: pulse-think 1.5s infinite ease-in-out; font-style: italic; color: var(--accent); font-weight: bold; }
-.is-thinking .bubble { border-color: var(--accent); box-shadow: 0 0 15px var(--accent-soft); }
+@keyframes pulse-think { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
+.thinking-spinner { animation: pulse-think 1.5s infinite ease-in-out; font-style: italic; color: var(--accent); font-weight: 500; }
+.is-thinking .bubble { border-color: var(--accent); box-shadow: 0 4px 16px var(--accent-soft); }
 
-.node{position:absolute;cursor:grab;user-select:none;font-size:12px;line-height:1.3;z-index:10;}
+.node{position:absolute;cursor:grab;user-select:none;font-size:13px;line-height:1.4;z-index:10;}
 .node-circle{
-  width:10px;height:10px;border-radius:999px;margin-bottom:3px;
-  flex-shrink:0;transition:box-shadow .2s,transform .2s;
+  width:8px;height:8px;border-radius:50%;margin-bottom:6px;
+  flex-shrink:0;transition:transform .2s; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
 }
 .node-text{position:relative; white-space:pre-wrap;color:var(--text);transition:opacity .2s ease;}
-.node-time { position: absolute; bottom: -16px; left: 0; font-size: 9px; color: var(--muted2); white-space: nowrap; pointer-events: none;}
+.node-time { position: absolute; bottom: -20px; left: 0; font-size: 10px; color: var(--muted); white-space: nowrap; pointer-events: none;}
 
 .dim-0 .node-text{opacity:1;}.dim-1 .node-text{opacity:.75;}
 .dim-2 .node-text{opacity:.55;}.dim-3 .node-text{opacity:.35;}.dim-4 .node-text{opacity:.18;}
 .node:hover .node-text{opacity:1!important;}
-.node:hover .node-circle{transform:scale(1.25);}
+.node:hover .node-circle{transform:scale(1.3);}
 
 .content-box { max-height: 150px; overflow-y: auto; overflow-wrap: anywhere; padding-right: 4px; max-width: 300px; }
 .content-box.expanded { max-height: none; }
 .expand-btn {
   background: transparent; border: none; color: var(--accent);
-  font-size: 10px; cursor: pointer; padding: 4px 0 0 0; display: none;
-  font-family: inherit; width: 100%; text-align: left;
+  font-size: 11px; cursor: pointer; padding: 4px 0 0 0; display: none;
+  font-family: inherit; width: 100%; text-align: left; font-weight: 500;
 }
 .expand-btn:hover { text-decoration: underline; }
 
-.node-question .node-circle, .node-text .node-circle {background:var(--node-q);box-shadow:0 0 8px var(--purple-glow),0 0 2px var(--purple-glow);}
-.node-answer .node-circle{background:var(--node-a);box-shadow:0 0 8px var(--green-glow),0 0 2px var(--green-glow);}
-.node-answer.completed .node-circle{background:var(--blue);box-shadow:0 0 8px var(--blue-glow),0 0 2px var(--blue-glow);}
-.node-timer .node-circle{background:var(--node-timer);box-shadow:0 0 8px rgba(251,191,36,0.4),0 0 2px rgba(251,191,36,0.4);}
-.node-timer.completed .node-circle{background:var(--blue);box-shadow:0 0 8px var(--blue-glow),0 0 2px var(--blue-glow);}
-.node-note .node-circle{background:var(--node-note);box-shadow:0 0 8px rgba(147,197,253,0.4),0 0 2px rgba(147,197,253,0.4);}
-.node-brainstorm .node-circle{background:var(--orange);box-shadow:0 0 8px rgba(249,115,22,0.4),0 0 2px rgba(249,115,22,0.4);}
+.node-question .node-circle, .node-text .node-circle {background:var(--node-q);}
+.node-answer .node-circle{background:var(--node-a);}
+.node-answer.completed .node-circle{background:var(--blue);}
+.node-timer .node-circle{background:var(--node-timer);}
+.node-timer.completed .node-circle{background:var(--blue);}
+.node-note .node-circle{background:var(--node-note);}
+.node-brainstorm .node-circle{background:var(--node-brainstorm);}
 
-.node.selected .node-circle{background:var(--select-color)!important;box-shadow:0 0 0 2px var(--select-color),0 0 14px var(--accent-glow),0 0 4px var(--accent-glow)!important;transform:scale(1.3);}
-.node.ctrl-highlight .node-circle{outline:2px solid var(--orange);outline-offset:3px;box-shadow:0 0 12px rgba(249,115,22,0.5)!important;}
-.node.find-focus .node-circle{box-shadow:0 0 0 3px var(--accent),0 0 24px var(--accent-glow)!important;animation:find-pulse 1s ease-in-out 3;}
+.node.selected .node-circle{background:var(--select-color)!important; transform:scale(1.4); box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--select-color);}
+.node.ctrl-highlight .node-circle{outline:2px solid var(--accent);outline-offset:3px;}
+.node.find-focus .node-circle{box-shadow:0 0 0 4px var(--accent)!important;animation:find-pulse 1s ease-in-out 3;}
 
-/* Pinned Highlight Styles (Solid RED) */
-.pinned-highlight .node-circle { box-shadow: 0 0 0 4px var(--red), 0 0 20px var(--red-glow) !important; transform: scale(1.4); }
-.group-hull.pinned-highlight { border-width: 3px !important; border-color: var(--red) !important; border-style: solid !important; background: rgba(239, 68, 68, 0.05) !important; opacity: 1 !important; box-shadow: 0 0 30px var(--red-glow) !important; z-index: 10; }
+/* Pinned Highlight Styles (Elegant Gold/Ochre) */
+.pinned-highlight .node-circle { box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--yellow) !important; transform: scale(1.4); }
+.group-hull.pinned-highlight { border-width: 2px !important; border-color: var(--yellow) !important; border-style: dashed !important; background: rgba(194, 179, 138, 0.05) !important; opacity: 1 !important; box-shadow: 0 8px 32px rgba(194, 179, 138, 0.15) !important; z-index: 10; }
 
 @keyframes find-pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.4);}}
 
-.group-badge{position:absolute;top:-8px;left:-4px;width:8px;height:8px;border-radius:50%;border:1px solid rgba(0,0,0,.4);z-index:6;}
+.group-badge{position:absolute;top:-8px;left:-4px;width:10px;height:10px;border-radius:50%;border:2px solid var(--surface);z-index:6;}
 
 .bubble{
   min-width: 150px; min-height: 50px; max-width: 400px; max-height: 250px;
-  padding:8px 10px; border-radius:12px;
-  border:1px solid var(--border2);background:var(--surface2);
+  padding:12px 14px; border-radius:16px;
+  border:1px solid var(--border);background:var(--surface);
   position: relative; overflow-y: auto; overflow-wrap: anywhere; resize: both;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.03);
 }
-.bubble-header{display:flex;justify-content:flex-end;margin-bottom:4px;}
+.bubble-header{display:flex;justify-content:flex-end;margin-bottom:6px;}
 .copy-btn{
-  background:var(--surface);border:1px solid var(--border2);color:var(--muted2);
-  font-size:10px;padding:2px 6px;border-radius:999px;cursor:pointer;
-  font-family:inherit;transition:all .15s; display: flex; align-items: center; gap: 4px;
+  background:var(--surface2);border:1px solid var(--border);color:var(--muted);
+  font-size:11px;padding:4px 8px;border-radius:12px;cursor:pointer;
+  font-family:inherit;transition:all .2s; display: flex; align-items: center; gap: 4px; font-weight: 500;
 }
-.copy-btn:hover{border-color:var(--accent);color:var(--text);}
-.copy-btn svg { width: 10px; height: 10px; }
+.copy-btn:hover{border-color:var(--accent);color:var(--text); background: var(--surface);}
+.copy-btn svg { width: 12px; height: 12px; }
 
-.note-wrap{display:flex;flex-direction:column;gap:4px; position:relative;}
+.note-wrap{display:flex;flex-direction:column;gap:6px; position:relative;}
 .note-title{
-  background:transparent;border:none;border-bottom:1px solid var(--border2);
-  color:var(--text);font-family:inherit;font-size:12px;font-weight:bold;
-  padding:2px 4px;width:100%;outline:none;
+  background:transparent;border:none;border-bottom:1px solid var(--border);
+  color:var(--text);font-family:inherit;font-size:14px;font-weight:600;
+  padding:4px 6px;width:100%;outline:none; transition: border-color 0.2s;
 }
 .note-title:focus{border-bottom-color:var(--accent);}
 .note-body{
   min-width:150px;min-height:80px; max-width: none; max-height: 250px;
   overflow-y:auto; overflow-wrap: anywhere; resize:both;
-  background:var(--surface2);border:1px solid var(--border2);border-radius:10px;
-  color:var(--text);font-family:inherit;font-size:12px;padding:8px 10px;outline:none;
+  background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  color:var(--text);font-family:inherit;font-size:13px;padding:12px 14px;outline:none;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.03); transition: border-color 0.2s;
 }
-.note-body:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft);}
+.note-body:focus{border-color:var(--accent);}
 
-.brainstorm-wrap { display: flex; flex-direction: column; gap: 4px; width: 260px;}
+.brainstorm-wrap { display: flex; flex-direction: column; gap: 6px; width: 260px;}
 .brainstorm-input { 
-  background: var(--surface2); border: 1px solid var(--border2); 
-  color: var(--text); padding: 6px 8px; font-size: 11px; outline: none; 
-  border-radius: 6px; font-family: inherit; resize: vertical; 
+  background: var(--surface); border: 1px solid var(--border); 
+  color: var(--text); padding: 10px 12px; font-size: 13px; outline: none; 
+  border-radius: 12px; font-family: inherit; resize: vertical; 
   min-height: 50px; max-height: 200px; width: 100%; white-space: pre-wrap;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.03); transition: border-color 0.2s;
 }
-.brainstorm-input:focus { border-color: var(--orange); }
-.brainstorm-run { background: var(--orange); color: white; font-weight: bold; font-family: inherit; border: none; padding: 6px 8px; font-size: 11px; cursor: pointer; border-radius: 6px; transition: opacity 0.2s; }
-.brainstorm-run:hover { opacity: 0.8; }
+.brainstorm-input:focus { border-color: var(--accent); }
+.brainstorm-run { background: var(--accent); color: white; font-weight: 500; font-family: inherit; border: none; padding: 8px 12px; font-size: 12px; cursor: pointer; border-radius: 10px; transition: all 0.2s; }
+.brainstorm-run:hover { background: var(--accent2); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(166, 144, 118, 0.2); }
 
 .timer-ring{position:relative;width:80px;height:80px;display:flex;align-items:center;justify-content:center;}
 .timer-ring svg{position:absolute;inset:0;transform:rotate(-90deg);}
 .ring-bg{fill:none;stroke:var(--ring-bg);stroke-width:6;}
 .ring-progress{fill:none;stroke-width:6;stroke-linecap:round;stroke:url(#timerGradient);transition:stroke .2s ease;}
-.timer-text{position:relative;font-size:11px;letter-spacing:.03em;}
+.timer-text{position:relative;font-size:12px;font-weight: 500;}
 
 .group-hull{
-  position:absolute;border-radius:16px;border:1px solid;
+  position:absolute;border-radius:24px;border:1px solid;
   pointer-events:all;z-index:2;cursor:move;
-  transition:opacity .2s, border-color .3s, box-shadow .3s;
+  transition:opacity .3s, border-color .3s, box-shadow .3s;
 }
-.group-hull:not(.collapsed){opacity:.12;}
-.group-hull:not(.collapsed):hover{opacity:.2;}
-.group-hull.collapsed{opacity:.3;}
-.group-hull.collapsed:hover{opacity:.45;}
+.group-hull:not(.collapsed){opacity:.08;}
+.group-hull:not(.collapsed):hover{opacity:.15;}
+.group-hull.collapsed{opacity:.25;}
+.group-hull.collapsed:hover{opacity:.4;}
 .group-label{
-  position:absolute;font-size:10px;opacity:.55;pointer-events:none;
-  z-index:3;letter-spacing:.06em;text-transform:uppercase;
+  position:absolute;font-size:11px;opacity:.6;pointer-events:none;
+  z-index:3;letter-spacing:.05em;text-transform:uppercase; font-weight: 600;
 }
-.group-label.collapsed-label{pointer-events:all;cursor:pointer;opacity:.85;}
+.group-label.collapsed-label{pointer-events:all;cursor:pointer;opacity:.9;}
 .group-resize-handle{
-  position:absolute;width:12px;height:12px;
-  background:rgba(255,255,255,.3);border-radius:2px;
+  position:absolute;width:14px;height:14px;
+  background:rgba(0,0,0,.1);border-radius:50%;
   cursor:se-resize;z-index:12;right:-6px;bottom:-6px;pointer-events:all;
   transition: background 0.2s;
 }
-.group-resize-handle:hover{background:rgba(255,255,255,.8);}
+.group-resize-handle:hover{background:rgba(0,0,0,.3);}
 
 #ctx-menu{
-  position:fixed;background:var(--surface);border:1px solid var(--border2);
-  border-radius:10px;padding:4px;z-index:300;display:none;min-width:165px;
-  box-shadow:0 8px 32px rgba(0,0,0,.8),0 0 0 1px rgba(124,58,237,0.1);
+  position:fixed;background:var(--surface);border:1px solid var(--border);
+  border-radius:16px;padding:6px;z-index:300;display:none;min-width:180px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.06);
 }
 #ctx-menu.visible{display:block;}
-.ctx-item{padding:8px 12px;font-size:11px;cursor:pointer;border-radius:6px;color:var(--text);}
-.ctx-item:hover{background:var(--surface2);}
-.ctx-item.danger{color:#f87171;}
+.ctx-item{padding:10px 14px;font-size:12px;cursor:pointer;border-radius:10px;color:var(--text); font-weight: 500;}
+.ctx-item:hover{background:var(--bg);}
+.ctx-item.danger{color:var(--red);}
 
 #suggestions-bar{
-  position: fixed; bottom: 95px; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
   display: flex; gap: 8px; z-index: 999;
   background: transparent; border: none; padding: 0; min-height: auto;
 }
 .suggestion-btn{
-  background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255,255,255,0.1); border-radius: 20px;
-  padding: 6px 14px; font-size: 11px; color:var(--text); cursor:pointer;
+  background: var(--glass-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.8); border-radius: 24px;
+  padding: 8px 16px; font-size: 12px; font-weight: 500; color:var(--text); cursor:pointer;
   transition:all .2s; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.05);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
 }
-.suggestion-btn:hover{border-color:rgba(255,255,255,0.3); background: rgba(255,255,255,0.1); box-shadow:0 6px 16px rgba(124,58,237,0.2), inset 0 1px 0 rgba(255,255,255,0.1);}
+.suggestion-btn:hover{border-color:var(--accent); color:var(--accent); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.08);}
 
+/* Floating Bottom Input Bar */
+#input-bar-container {
+  position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 1000;
+}
 #input-bar {
-  position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 12px; padding: 12px 18px;
-  background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255,255,255,0.1); border-radius: 30px;
+  display: flex; gap: 12px; padding: 12px 16px;
+  background: var(--glass-bg); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.8); border-radius: 30px;
   width: 640px; max-width: 90vw;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
-  z-index: 1000; align-items: flex-end;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,1);
+  align-items: flex-end;
 }
 #prompt {
   flex: 1; resize: none; background: transparent; border: none;
-  color: var(--text); padding: 8px 4px; font-family: inherit; font-size: 13px;
-  outline: none; max-height: 120px; min-height: 20px; overflow-y: auto;
-  line-height: 1.4; margin-bottom: 2px;
+  color: var(--text); padding: 8px 6px; font-family: inherit; font-size: 14px;
+  outline: none; max-height: 120px; min-height: 24px; overflow-y: auto;
+  line-height: 1.5; margin-bottom: 2px;
 }
-#prompt::placeholder { color: var(--muted); }
+#prompt::placeholder { color: var(--muted); font-weight: 300;}
 #send-btn {
-  width: 38px; height: 38px; border-radius: 50%; padding: 0;
-  background: var(--text); color: var(--surface); border: none;
+  width: 40px; height: 40px; border-radius: 50%; padding: 0;
+  background: var(--accent); color: white; border: none;
   display: flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: transform 0.2s, background 0.2s, box-shadow 0.2s;
+  cursor: pointer; transition: all 0.2s;
   font-size: 18px; font-weight: bold; flex-shrink: 0; margin-bottom: 2px;
+  box-shadow: 0 4px 12px rgba(166, 144, 118, 0.2);
 }
-#send-btn:hover { transform: scale(1.05); background: var(--accent); color: white; box-shadow: 0 0 15px var(--accent-glow); }
+#send-btn:hover { transform: scale(1.05); background: var(--accent2); box-shadow: 0 6px 16px rgba(166, 144, 118, 0.3); }
 
 /* Glass Style Buttons */
 .top-btn {
-  background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.1); border-top: 1px solid rgba(255, 255, 255, 0.25);
-  color: var(--text); padding: calc(8px * var(--ui-scale)) calc(14px * var(--ui-scale));
-  border-radius: 12px; font-family: inherit; font-size: calc(12px * var(--ui-scale)); font-weight: 500;
-  cursor: pointer; transition: all .2s cubic-bezier(0.4, 0, 0.2, 1);
+  background: transparent; border: none;
+  color: var(--text); padding: calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  border-radius: 20px; font-family: inherit; font-size: calc(13px * var(--ui-scale)); font-weight: 500;
+  cursor: pointer; transition: all .2s ease;
   display: flex; align-items: center; gap: 6px; white-space: nowrap;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.05);
 }
 .top-btn:hover { 
-  background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.3); 
-  transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124,58,237,0.15), inset 0 1px 0 rgba(255,255,255,0.1); 
+  background: rgba(0, 0, 0, 0.04); color: var(--accent);
 }
-.top-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.top-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+.btn-primary-glass {
+  background: var(--accent); color: white; border-radius: 20px; box-shadow: 0 4px 12px rgba(166, 144, 118, 0.2);
+}
+.btn-primary-glass:hover {
+  background: var(--accent2); color: white; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(166, 144, 118, 0.3);
+}
 
 /* Chat Window */
 #chat-window { 
-  position:fixed; width:300px; height:400px; min-width: 250px; min-height: 300px;
-  background:var(--glass-bg); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); 
-  border:1px solid rgba(255,255,255,0.1); border-radius:16px; display:none; 
-  flex-direction:column; z-index:2000; box-shadow: 0 10px 40px rgba(0,0,0,0.5); resize: both; overflow: hidden; 
+  position:fixed; width:320px; height:400px; min-width: 250px; min-height: 300px;
+  background:var(--glass-bg); backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px); 
+  border:1px solid rgba(255,255,255,0.8); border-radius:24px; display:none; 
+  flex-direction:column; z-index:2000; box-shadow: 0 16px 50px rgba(0,0,0,0.06); resize: both; overflow: hidden; 
 }
 #chat-window.visible { display:flex; }
-.chat-header { padding: 12px; border-bottom: 1px solid var(--border2); font-weight: bold; display:flex; justify-content: space-between; align-items:center; font-size: 13px; cursor: move; user-select: none; }
-#chat-close { background:transparent; border:none; color:var(--text); cursor:pointer; font-size:16px; transition: color 0.2s; padding: 0 4px; }
+.chat-header { padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; display:flex; justify-content: space-between; align-items:center; font-size: 14px; cursor: move; user-select: none; }
+#chat-close { background:transparent; border:none; color:var(--muted); cursor:pointer; font-size:18px; transition: color 0.2s; padding: 0 4px; }
 #chat-close:hover { color: var(--red); }
-.chat-messages { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
-.chat-msg { padding:8px 10px; border-radius:12px; font-size:11px; word-wrap:break-word; max-width: 85%; position: relative;}
-.chat-msg.sent { align-self: flex-end; background: var(--accent); color: white; border-bottom-right-radius: 4px; }
-.chat-msg.received { align-self: flex-start; background: var(--surface2); border: 1px solid var(--border2); color: var(--text); border-bottom-left-radius: 4px; }
-.chat-msg .sender { font-weight:bold; font-size:9px; opacity: 0.8; margin-bottom: 2px; }
+.chat-messages { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+.chat-msg { padding:10px 14px; border-radius:16px; font-size:12px; word-wrap:break-word; max-width: 85%; position: relative;}
+.chat-msg.sent { align-self: flex-end; background: var(--accent); color: white; border-bottom-right-radius: 4px; box-shadow: 0 4px 12px rgba(166, 144, 118, 0.15);}
+.chat-msg.received { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-bottom-left-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);}
+.chat-msg .sender { font-weight:600; font-size:10px; opacity: 0.9; margin-bottom: 4px; }
 .chat-msg.sent .sender { text-align: right; }
-.chat-msg .timestamp { font-size: 8px; opacity: 0.6; margin-top: 4px; text-align: right; display: block; }
-.chat-msg .node-ref { display:inline-block; background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.3); padding:2px 6px; border-radius:4px; margin-bottom:4px; cursor:pointer; color:inherit; text-decoration:none; font-size: 9px; transition: background 0.2s; }
-.chat-msg .node-ref:hover { background:rgba(255,255,255,0.25); }
-.chat-msg .delete-msg { position: absolute; top: 4px; right: 4px; background: transparent; border: none; color: inherit; opacity: 0; font-size: 10px; cursor: pointer; transition: opacity 0.2s; }
+.chat-msg .timestamp { font-size: 9px; opacity: 0.7; margin-top: 6px; text-align: right; display: block; }
+.chat-msg .node-ref { display:inline-block; background:rgba(0,0,0,0.05); border:1px solid rgba(0,0,0,0.1); padding:4px 8px; border-radius:8px; margin-bottom:6px; cursor:pointer; color:inherit; text-decoration:none; font-size: 10px; transition: all 0.2s; font-weight: 500;}
+.chat-msg.sent .node-ref { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3);}
+.chat-msg .node-ref:hover { background:rgba(0,0,0,0.1); }
+.chat-msg.sent .node-ref:hover { background:rgba(255,255,255,0.25); }
+.chat-msg .delete-msg { position: absolute; top: 6px; right: 6px; background: transparent; border: none; color: inherit; opacity: 0; font-size: 12px; cursor: pointer; transition: opacity 0.2s; }
 .chat-msg:hover .delete-msg { opacity: 0.6; }
 .chat-msg .delete-msg:hover { opacity: 1; }
-.chat-input-wrap { display:flex; border-top:1px solid var(--border2); padding:8px; background:rgba(0,0,0,0.2); gap: 6px; }
-#chat-input { flex:1; background:transparent; border:none; color:var(--text); outline:none; font-family:inherit; font-size:11px; }
-#chat-send { background:var(--accent); border:none; color:white; border-radius:50%; width:28px; height:28px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink: 0;}
-#chat-send:hover { background: var(--accent2); }
+.chat-input-wrap { display:flex; border-top:1px solid var(--border); padding:12px; background:rgba(255,255,255,0.5); gap: 8px; }
+#chat-input { flex:1; background:var(--surface); border:1px solid var(--border); border-radius: 20px; color:var(--text); outline:none; font-family:inherit; font-size:13px; padding: 8px 12px; transition: border-color 0.2s;}
+#chat-input:focus { border-color: var(--accent); }
+#chat-send { background:var(--accent); border:none; color:white; border-radius:50%; width:34px; height:34px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink: 0; box-shadow: 0 4px 10px rgba(166, 144, 118, 0.2); transition: all 0.2s;}
+#chat-send:hover { background: var(--accent2); transform: scale(1.05); }
 
 #zoom-controls{
-  position:fixed;bottom:124px;right:14px;display:flex;flex-direction:column;gap:6px;z-index:200;
+  position:fixed;bottom:130px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:200;
 }
 .zoom-btn{
-  background:rgba(255,255,255,0.05); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border:1px solid rgba(255,255,255,0.1); color:var(--text);
-  width:36px;height:36px;border-radius:12px;font-family:inherit;font-size:16px;cursor:pointer;
+  background:var(--glass-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border:1px solid rgba(255,255,255,0.8); color:var(--text);
+  width:40px;height:40px;border-radius:16px;font-family:inherit;font-size:18px;cursor:pointer;
   display:flex;align-items:center;justify-content:center;transition:all .2s;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.05);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
 }
-.zoom-btn:hover{background:rgba(255,255,255,0.1); border-color:rgba(255,255,255,0.3); color:var(--text);box-shadow: 0 4px 15px rgba(124,58,237,0.2);}
+.zoom-btn:hover{background:var(--surface); border-color:var(--accent); color:var(--accent); transform:translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,0.08);}
 #zoom-label{
-  background:rgba(255,255,255,0.05); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border:1px solid rgba(255,255,255,0.1); color:var(--text);
-  font-size:10px;border-radius:8px;text-align:center;padding:4px 0;font-family:inherit;
+  background:var(--glass-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border:1px solid rgba(255,255,255,0.8); color:var(--muted);
+  font-size:11px;border-radius:12px;text-align:center;padding:6px 0;font-family:inherit; font-weight: 500;
 }
 
 #slash-popup{
-  position:absolute; bottom:calc(100% + 12px); left:12px;
-  background:var(--surface);border:1px solid var(--border2);
-  border-radius:12px;padding:6px;z-index:1000;display:none;min-width:280px;
-  box-shadow:0 10px 30px rgba(0,0,0,0.8),0 0 0 1px rgba(124,58,237,0.1);
+  position:absolute; bottom:calc(100% + 16px); left:16px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:16px;padding:8px;z-index:1000;display:none;min-width:280px;
+  box-shadow:0 12px 40px rgba(0,0,0,0.08);
 }
 #slash-popup.visible{display:block;}
-.slash-item{display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border-radius:6px;cursor:pointer;}
-.slash-item:hover,.slash-item.active{background:var(--surface2);}
-.slash-item-cmd{color:var(--accent);font-size:11px;font-weight:bold;white-space:nowrap;min-width:80px;}
-.slash-item-desc{color:var(--muted2);font-size:10px;line-height:1.4;}
+.slash-item{display:flex;align-items:flex-start;gap:12px;padding:10px 12px;border-radius:10px;cursor:pointer;}
+.slash-item:hover,.slash-item.active{background:var(--bg);}
+.slash-item-cmd{color:var(--accent);font-size:13px;font-weight:600;white-space:nowrap;min-width:80px;}
+.slash-item-desc{color:var(--muted);font-size:12px;line-height:1.4;}
 
 #color-picker-popup{
-  position:fixed;background:var(--surface);border:1px solid var(--border2);
-  border-radius:12px;padding:12px;z-index:1500;display:none;
-  box-shadow:0 8px 32px rgba(0,0,0,.8);flex-direction:column;gap:8px;min-width:210px;
+  position:fixed;background:var(--surface);border:1px solid var(--border);
+  border-radius:16px;padding:16px;z-index:1500;display:none;
+  box-shadow:0 12px 40px rgba(0,0,0,.08);flex-direction:column;gap:12px;min-width:240px;
 }
 #color-picker-popup.visible{display:flex;}
-.color-picker-title{font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.06em;}
-.color-swatches{display:flex;gap:6px;flex-wrap:wrap;}
-.color-swatch{width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .1s,border-color .1s;}
-.color-swatch:hover{transform:scale(1.2);}
-.color-swatch.active{border-color:white;box-shadow:0 0 8px currentColor;}
+.color-picker-title{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em; font-weight: 600;}
+.color-swatches{display:flex;gap:8px;flex-wrap:wrap;}
+.color-swatch{width:24px;height:24px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .2s,border-color .2s;}
+.color-swatch:hover{transform:scale(1.15);}
+.color-swatch.active{border-color:var(--text);box-shadow:0 4px 12px rgba(0,0,0,0.1);}
 .color-picker-input{
-  background:var(--surface2);border:1px solid var(--border2);border-radius:6px;
-  color:var(--text);font-family:inherit;font-size:11px;padding:5px 8px;width:100%;outline:none;
+  background:var(--bg);border:1px solid var(--border);border-radius:10px;
+  color:var(--text);font-family:inherit;font-size:13px;padding:8px 12px;width:100%;outline:none; transition: border-color 0.2s;
 }
 .color-picker-input:focus{border-color:var(--accent);}
-.color-picker-actions{display:flex;gap:6px;}
+.color-picker-actions{display:flex;gap:8px;}
 .color-picker-btn{
-  flex:1;background:var(--surface2);border:1px solid var(--border2);color:var(--text);
-  font-family:inherit;font-size:10px;padding:5px;border-radius:6px;cursor:pointer;transition:all .15s;
+  flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);
+  font-family:inherit;font-size:12px;padding:8px;border-radius:10px;cursor:pointer;transition:all .2s; font-weight: 500;
 }
-.color-picker-btn:hover{border-color:var(--accent);}
+.color-picker-btn:hover{border-color:var(--accent); background: var(--surface);}
 
 /* Modals */
 .modal-overlay {
-  position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:3000;
-  display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+  position:fixed;inset:0;background:rgba(247, 245, 240, 0.8);z-index:3000;
+  display:none;align-items:center;justify-content:center;backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
 }
 .modal-overlay.visible{display:flex;}
 .modal-box {
-  background:var(--surface);border:1px solid var(--border2);border-radius:16px;
-  padding:24px;min-width:320px;display:flex;flex-direction:column;gap:16px;
-  box-shadow:0 0 60px rgba(124,58,237,0.15); max-width: 90vw;
+  background:var(--surface);border:1px solid var(--border);border-radius:24px;
+  padding:32px;min-width:360px;display:flex;flex-direction:column;gap:20px;
+  box-shadow:0 20px 60px rgba(0,0,0,0.05); max-width: 90vw;
 }
-.modal-title{font-size:14px;font-weight:bold;color:var(--text); display:flex; justify-content:space-between;}
-.settings-row{display:flex;flex-direction:column;gap:6px;}
-.settings-label{font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.05em;}
+.modal-title{font-size:18px;font-weight:600;color:var(--text); display:flex; justify-content:space-between;}
+.settings-row{display:flex;flex-direction:column;gap:8px;}
+.settings-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em; font-weight: 600;}
 .settings-select, .modal-input{
-  background:var(--surface2);border:1px solid var(--border2);border-radius:8px;
-  color:var(--text);font-family:inherit;font-size:11px;padding:10px;outline:none; width: 100%;
+  background:var(--bg);border:1px solid var(--border);border-radius:12px;
+  color:var(--text);font-family:inherit;font-size:14px;padding:12px 14px;outline:none; width: 100%; transition: border-color 0.2s;
 }
+.settings-select:focus, .modal-input:focus { border-color: var(--accent); }
 .modal-close, .modal-btn{
-  background:var(--surface2);border:1px solid var(--border2);color:var(--text);
-  font-family:inherit;font-size:calc(11px * var(--ui-scale));
-  padding:calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale));
-  border-radius:8px;cursor:pointer;
-  transition:all .15s; align-self: flex-end; font-weight: bold; display: flex; align-items: center; gap: 6px;
+  background:var(--surface2);border:1px solid var(--border);color:var(--text);
+  font-family:inherit;font-size:calc(13px * var(--ui-scale));
+  padding:calc(10px * var(--ui-scale)) calc(16px * var(--ui-scale));
+  border-radius:12px;cursor:pointer;
+  transition:all .2s; align-self: flex-end; font-weight: 500; display: flex; align-items: center; gap: 6px;
 }
-.modal-close:hover{border-color:var(--accent);}
-.modal-btn.primary { background: var(--accent); color: white; border: none; box-shadow: 0 0 10px var(--accent-glow); }
-.modal-btn.primary:hover { background: var(--accent2); }
+.modal-close:hover{border-color:var(--accent); background: var(--surface);}
+.modal-btn.primary { background: var(--accent); color: white; border: none; box-shadow: 0 4px 12px rgba(166, 144, 118, 0.2); }
+.modal-btn.primary:hover { background: var(--accent2); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(166, 144, 118, 0.25); }
 
 .share-input-wrap { display: flex; gap: 8px; align-items: center; }
 .collab-list { max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.collab-item { font-size: 11px; padding: 6px 10px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border2); display: flex; justify-content: space-between; align-items: center; }
-.remove-collab-btn { background: transparent; border: none; color: #ef4444; font-weight: bold; cursor: pointer; padding: 4px; border-radius: 4px;}
-.remove-collab-btn:hover { background: rgba(239,68,68,0.2); }
+.collab-item { font-size: 13px; padding: 10px 14px; background: var(--bg); border-radius: 12px; border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.remove-collab-btn { background: transparent; border: none; color: var(--red); font-weight: bold; cursor: pointer; padding: 6px; border-radius: 8px; transition: background 0.2s;}
+.remove-collab-btn:hover { background: rgba(200, 138, 122, 0.1); }
 
-.dash-list { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-.dash-item { font-size: 11px; padding: 12px; background: var(--surface2); border-radius: 8px; border: 1px solid var(--border2); transition: all 0.2s; display: flex; justify-content: space-between; align-items: center; }
-.dash-item:hover { border-color: var(--accent); background: rgba(124,58,237,0.05); }
+.dash-list { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.dash-item { font-size: 13px; padding: 16px; background: var(--surface); border-radius: 16px; border: 1px solid var(--border); transition: all 0.2s; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.02);}
+.dash-item:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,0.04); }
 
-.dash-delete-btn { background: transparent; border: none; color: var(--red); cursor: pointer; font-size: 14px; margin-left: 8px; padding: 4px; border-radius: 4px;}
-.dash-delete-btn:hover { background: rgba(239,68,68,0.2); }
+.dash-delete-btn { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 16px; margin-left: 8px; padding: 6px; border-radius: 8px; transition: all 0.2s;}
+.dash-delete-btn:hover { background: rgba(200, 138, 122, 0.1); color: var(--red); }
 
-/* Share & Presence */
-#share-btn {
-  background: var(--accent); color: white; font-weight: bold; border: none;
-  box-shadow: 0 0 10px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.2); margin-left: auto;
-}
-#share-btn:hover { background: var(--accent2); transform: translateY(-1px); box-shadow: 0 4px 15px var(--accent-glow); }
+/* Presence */
 #presence-bar { display: flex; gap: -8px; margin-left: 10px; align-items: center;}
 .presence-avatar {
-  width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--surface);
+  width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--surface);
   display: flex; align-items: center; justify-content: center; cursor: pointer;
-  font-size: 11px; color: white; font-weight: bold; text-transform: uppercase;
+  font-size: 12px; color: white; font-weight: 600; text-transform: uppercase;
   transition: transform 0.2s, z-index 0.2s; position: relative;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 .presence-avatar:hover { transform: translateY(-3px) scale(1.1); z-index: 100 !important; }
 .remote-cursor {
@@ -753,100 +810,102 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   display: flex; flex-direction: column; align-items: flex-start;
   transition: transform 0.1s linear, left 0.1s linear, top 0.1s linear;
 }
-.remote-cursor svg { width: 14px; height: 14px; transform: translate(-3px, -3px); }
+.remote-cursor svg { width: 16px; height: 16px; transform: translate(-3px, -3px); }
 .remote-cursor-label {
-  background: currentColor; color: white; font-size: 9px; padding: 2px 6px;
-  border-radius: 4px; margin-left: 8px; margin-top: -4px; font-weight: bold;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.5); white-space: nowrap;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  background: currentColor; color: white; font-size: 10px; padding: 3px 8px;
+  border-radius: 8px; margin-left: 10px; margin-top: -2px; font-weight: 600;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15); white-space: nowrap;
 }
 
 /* Tutorial Overlay */
 #tutorial-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 5000;
-  display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px);
+  position: fixed; inset: 0; background: rgba(247, 245, 240, 0.85); z-index: 5000;
+  display: none; align-items: center; justify-content: center; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
 }
 #tutorial-overlay.visible { display: flex; }
 .tut-box {
-  background: var(--surface); border: 1px solid var(--accent); border-radius: 16px;
-  padding: 30px; width: 400px; max-width: 90vw; text-align: center;
-  box-shadow: 0 0 60px rgba(124,58,237,0.3); position: relative;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 24px;
+  padding: 40px; width: 440px; max-width: 90vw; text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.08); position: relative;
 }
-.tut-title { font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; }
-.tut-desc { font-size: 13px; color: var(--muted); margin-bottom: 24px; line-height: 1.5; }
-.tut-dots { display: flex; justify-content: center; gap: 8px; margin-bottom: 24px; }
-.tut-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border2); transition: background 0.3s; }
-.tut-dot.active { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
-.tut-btn-row { display: flex; justify-content: space-between; }
-.tut-skip { background: transparent; border: none; color: var(--muted2); cursor: pointer; font-family: inherit; font-size: 12px; transition: color 0.2s; }
-.tut-skip:hover { color: white; }
-.tut-next { background: var(--accent); border: none; color: white; padding: 8px 16px; border-radius: 8px; font-weight: bold; cursor: pointer; font-family: inherit; box-shadow: 0 0 10px var(--accent-glow); }
-.tut-next:hover { background: var(--accent2); }
+.tut-title { font-size: 22px; font-weight: 600; color: var(--text); margin-bottom: 16px; }
+.tut-desc { font-size: 14px; color: var(--muted); margin-bottom: 32px; line-height: 1.6; }
+.tut-dots { display: flex; justify-content: center; gap: 8px; margin-bottom: 32px; }
+.tut-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); transition: background 0.3s; }
+.tut-dot.active { background: var(--accent); }
+.tut-btn-row { display: flex; justify-content: space-between; align-items: center; }
+.tut-skip { background: transparent; border: none; color: var(--muted); cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500; transition: color 0.2s; }
+.tut-skip:hover { color: var(--text); }
+.tut-next { background: var(--accent); border: none; color: white; padding: 12px 24px; border-radius: 12px; font-weight: 500; font-size: 14px; cursor: pointer; font-family: inherit; box-shadow: 0 8px 16px rgba(166, 144, 118, 0.2); transition: all 0.2s;}
+.tut-next:hover { background: var(--accent2); transform: translateY(-1px); box-shadow: 0 12px 20px rgba(166, 144, 118, 0.25);}
 
 /* Mobile Responsiveness */
 @media (max-width: 768px) {
+  #top-bar-container { width: 95%; top: 12px; }
   #top-bar {
-      top: 8px; left: 8px; right: 8px;
-      overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px;
+      overflow-x: auto; flex-wrap: nowrap; justify-content: flex-start;
   }
-  .board-title-input { min-width: 100px; font-size: 12px; }
-  .top-btn { padding: 6px 10px; font-size: 11px; }
+  .board-title-input { min-width: 100px; font-size: 13px; }
+  .top-btn { padding: 6px 10px; font-size: 12px; }
+  #input-bar-container { width: 95%; bottom: 16px; }
   #input-bar {
-      width: calc(100vw - 16px); bottom: 16px; padding: 8px 12px;
-      border-radius: 20px;
+      width: 100%; padding: 10px 14px;
+      border-radius: 24px;
   }
   #suggestions-bar {
-      bottom: 70px; flex-wrap: nowrap; overflow-x: auto;
+      bottom: 80px; flex-wrap: nowrap; overflow-x: auto;
       width: 100vw; padding: 0 10px; justify-content: flex-start;
   }
   .suggestion-btn { flex-shrink: 0; }
   #chat-window {
-      width: calc(100vw - 32px); right: 16px; height: 350px; bottom: 80px; left: 16px !important; top: auto !important;
+      width: calc(100vw - 32px); right: 16px; height: 400px; bottom: 90px; left: 16px !important; top: auto !important;
   }
 }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="top-bar">
-    <button class="top-btn" id="dash-btn" title="Dashboard">
-      <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg> Dash
-    </button>
-    <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.2); margin: 0 4px; flex-shrink:0;"></div>
-    
-    <input type="text" id="board-title-input" class="board-title-input" value="Untitled Canvas" />
-    <div id="sync-indicator" title="Sync Status" style="display:flex; align-items:center; margin-left: 4px; flex-shrink:0;"></div>
+  <div id="top-bar-container">
+    <div id="top-bar">
+      <button class="top-btn" id="dash-btn" title="Dashboard">
+        <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg> Dash
+      </button>
+      <div style="width: 1px; height: 16px; background: rgba(0,0,0,0.1); margin: 0 4px; flex-shrink:0;"></div>
+      
+      <input type="text" id="board-title-input" class="board-title-input" value="Untitled Canvas" />
+      <div id="sync-indicator" title="Sync Status" style="display:flex; align-items:center; margin-left: 4px; flex-shrink:0;"></div>
 
-    <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.2); margin: 0 4px; flex-shrink:0;"></div>
-    
-    <button class="top-btn" id="study-btn">
-      <svg viewBox="0 0 24 24"><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path></svg> Study
-    </button>
-    <button class="top-btn" id="auto-btn">
-      <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg> Auto Layout
-    </button>
-    <button class="top-btn" id="group-btn">
-      <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4z"></path><path d="M14 4h6v6h-6z"></path><path d="M14 14h6v6h-6z"></path><path d="M4 14h6v6H4z"></path></svg> Group
-    </button>
-    <button class="top-btn" id="note-btn">
-      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg> Note
-    </button>
-    <button class="top-btn" id="brainstorm-btn">
-      <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> Brainstorm
-    </button>
-    <button class="top-btn" id="settings-btn" title="Settings">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings
-    </button>
-    <button class="top-btn" id="chat-btn" style="display:none;">
-      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Chat
-    </button>
-    <button class="top-btn btn-guest" id="exit-guest-btn" style="display:none;" onclick="window.location.href='/auth/logout'">
-        <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg> Exit Guest
-    </button>
-    
-    <div id="presence-bar"></div>
-    <button class="top-btn" id="share-btn">Share</button>
-    <div class="user-badge" id="user-badge">…</div>
+      <div style="width: 1px; height: 16px; background: rgba(0,0,0,0.1); margin: 0 4px; flex-shrink:0;"></div>
+      
+      <button class="top-btn" id="study-btn">
+        <svg viewBox="0 0 24 24"><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path></svg> Study
+      </button>
+      <button class="top-btn" id="auto-btn">
+        <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg> Auto Layout
+      </button>
+      <button class="top-btn" id="group-btn">
+        <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4z"></path><path d="M14 4h6v6h-6z"></path><path d="M14 14h6v6h-6z"></path><path d="M4 14h6v6H4z"></path></svg> Group
+      </button>
+      <button class="top-btn" id="note-btn">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 8 9"></polyline></svg> Note
+      </button>
+      <button class="top-btn" id="brainstorm-btn">
+        <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> Brainstorm
+      </button>
+      <button class="top-btn" id="settings-btn" title="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings
+      </button>
+      <button class="top-btn" id="chat-btn" style="display:none;">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Chat
+      </button>
+      <button class="top-btn btn-guest" id="exit-guest-btn" style="display:none;" onclick="window.location.href='/auth/logout'">
+          <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg> Exit Guest
+      </button>
+      
+      <div id="presence-bar"></div>
+      <button class="top-btn btn-primary-glass" id="share-btn">Share</button>
+      <div class="user-badge" id="user-badge">…</div>
+    </div>
   </div>
 
   <div id="canvas-wrapper">
@@ -861,20 +920,24 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
       <div class="chat-messages" id="chat-messages"></div>
       <div class="chat-input-wrap">
           <input type="text" id="chat-input" placeholder="Type a message...">
-          <button id="chat-send">▶</button>
+          <button id="chat-send">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+          </button>
       </div>
   </div>
 
   <div id="suggestions-bar"></div>
-  <div id="input-bar">
-    <div id="slash-popup"></div>
-    <textarea id="prompt" placeholder="Ask anything. Type / for commands..." rows="1"></textarea>
-    <button id="send-btn" title="Send (Enter)">↑</button>
+  <div id="input-bar-container">
+    <div id="input-bar">
+      <div id="slash-popup"></div>
+      <textarea id="prompt" placeholder="Ask anything. Type / for commands..." rows="1"></textarea>
+      <button id="send-btn" title="Send (Enter)">↑</button>
+    </div>
   </div>
 </div>
 
 <div id="zoom-controls">
-  <button class="zoom-btn" id="recenter-btn" title="Recenter view" style="font-size:12px;">⊙</button>
+  <button class="zoom-btn" id="recenter-btn" title="Recenter view" style="font-size:14px;">⊙</button>
   <button class="zoom-btn" id="zoom-in-btn">+</button>
   <div id="zoom-label">100%</div>
   <button class="zoom-btn" id="zoom-out-btn">−</button>
@@ -885,7 +948,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
   <div class="color-swatches" id="color-swatches"></div>
   <input class="color-picker-input" id="group-name-input" placeholder="Group name (optional)"/>
   <div class="color-picker-actions">
-    <button class="color-picker-btn" id="color-confirm-btn">Create Group</button>
+    <button class="color-picker-btn" id="color-confirm-btn" style="background:var(--accent);color:white;border:none;">Create Group</button>
     <button class="color-picker-btn" id="color-cancel-btn">Cancel</button>
   </div>
 </div>
@@ -899,9 +962,9 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
     <div class="settings-row">
       <div class="settings-label">Color Theme</div>
       <select class="settings-select" id="theme-select">
-        <option value="midnight" selected>Midnight (Dark)</option>
-        <option value="nord">Nord (Cool Dark)</option>
-        <option value="light">Light Mode</option>
+        <option value="zen_light" selected>Zen Ivory (Light)</option>
+        <option value="zen_dark">Espresso (Dark)</option>
+        <option value="minimal">Minimal White</option>
       </select>
     </div>
     
@@ -940,7 +1003,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
         </button>
       </div>
     </div>
-    <div style="height: 1px; background: var(--border2); margin: 8px 0;"></div>
+    <div style="height: 1px; background: var(--border); margin: 8px 0;"></div>
     <div class="settings-row">
       <div class="settings-label">Add Collaborators (By Email)</div>
       <div class="share-input-wrap">
@@ -957,10 +1020,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 </div>
 
 <div id="dash-modal" class="modal-overlay">
-  <div class="modal-box" style="width: 500px; max-width: 90vw;">
+  <div class="modal-box" style="width: 520px; max-width: 90vw;">
     <div class="modal-title">
         <span>Canvas Dashboard</span> 
-        <a href="/auth/logout" style="font-size:12px; color:var(--red); text-decoration:none; display:flex; align-items:center; gap: 4px;">
+        <a href="/auth/logout" style="font-size:13px; color:var(--red); text-decoration:none; display:flex; align-items:center; gap: 4px; font-weight: 500;">
             <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg> Sign Out
         </a>
     </div>
@@ -968,12 +1031,12 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
     <div class="settings-row">
       <div style="display:flex; justify-content:space-between; align-items:center;">
          <div class="settings-label">My Canvases</div>
-         <button class="modal-btn primary" id="new-canvas-btn" style="padding:6px 12px; font-size: 11px;">+ New Canvas</button>
+         <button class="modal-btn primary" id="new-canvas-btn" style="padding:8px 14px; font-size: 12px;">+ New Canvas</button>
       </div>
       <div class="dash-list" id="my-dash-list">Loading...</div>
     </div>
     
-    <div style="height: 1px; background: var(--border2); margin: 8px 0;"></div>
+    <div style="height: 1px; background: var(--border); margin: 8px 0;"></div>
     
     <div class="settings-row">
       <div class="settings-label">Shared with You</div>
@@ -985,8 +1048,8 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 
 <div id="tutorial-overlay">
     <div class="tut-box">
-        <div class="tut-title" id="tut-title">Welcome to SecondBrain!</div>
-        <div class="tut-desc" id="tut-desc">Let's take a quick 1-minute tour to help you get started with your new knowledge graph.</div>
+        <div class="tut-title" id="tut-title">Welcome to SecondBrain</div>
+        <div class="tut-desc" id="tut-desc">Let's take a quick 1-minute tour to help you get started with your peaceful new knowledge graph.</div>
         <div class="tut-dots" id="tut-dots">
             <div class="tut-dot active"></div><div class="tut-dot"></div><div class="tut-dot"></div><div class="tut-dot"></div>
         </div>
@@ -1035,7 +1098,7 @@ const MAX_HISTORY=80;
 let slashActive=false, slashSelectedIndex=0;
 let ctxTargetGroupId=null;
 let ctxTargetNodeId=null;
-let pendingGroupColor="#7c3aed";
+let pendingGroupColor="#A69076";
 let editingGroupId=null;
 let currentScale=1.0;
 const MIN_SCALE=0.1, MAX_SCALE=4.0;
@@ -1048,7 +1111,8 @@ let explicitlyDeselected=false;
 let isLassoing=false;
 let lassoStartX=0, lassoStartY=0;
 
-const GROUP_COLORS=["#f87171","#fb923c","#fbbf24","#a3e635","#34d399","#22d3ee","#60a5fa","#a78bfa","#f472b6","#e2e8f0"];
+// Earthy, elegant color palette for groups
+const GROUP_COLORS=["#C2A878","#B5996D","#A39B8B","#D4C3A3","#B89A9A","#9E9B85","#C88A7A","#D9CFC1","#E3D7CB","#EBE5D9"];
 const SLASH_COMMANDS=[
   {cmd:"/find",   desc:"Scroll to the most relevant node",  argHint:"/find "},
   {cmd:"/pinned", desc:"Highlight all pinned items",         argHint:"/pinned"},
@@ -1058,9 +1122,9 @@ const SLASH_COMMANDS=[
 ];
 
 const THEMES = {
-  midnight: { bg:"#000000", canvas:"#000000", surface:"#080810", surface2:"#0d0d1a", border:"#141428", border2:"#1e1e3a", text:"#e8e8f0", muted:"#4a4a6a", muted2:"#6a6a8a", glassBg:"rgba(8, 8, 16, 0.65)", gridColor:"rgba(255, 255, 255, 0.08)" },
-  nord: { bg:"#2E3440", canvas:"#2E3440", surface:"#3B4252", surface2:"#434C5E", border:"#4C566A", border2:"#4C566A", text:"#ECEFF4", muted:"#D8DEE9", muted2:"#E5E9F0", glassBg:"rgba(59, 66, 82, 0.65)", gridColor:"rgba(255, 255, 255, 0.1)" },
-  light: { bg:"#f8f9fa", canvas:"#e9ecef", surface:"#ffffff", surface2:"#f8f9fa", border:"#dee2e6", border2:"#ced4da", text:"#212529", muted:"#6c757d", muted2:"#495057", glassBg:"rgba(255, 255, 255, 0.7)", gridColor:"rgba(0, 0, 0, 0.1)" }
+  zen_light: { bg:"#F7F5F0", canvas:"#F7F5F0", surface:"#FFFFFF", surface2:"#FBFAF8", border:"#E8E2D9", border2:"#DCD5CB", text:"#3E3A35", muted:"#8A837A", muted2:"#A39B8B", glassBg:"rgba(255, 255, 255, 0.7)", gridColor:"rgba(166, 144, 118, 0.15)" },
+  zen_dark: { bg:"#1E1C1A", canvas:"#1E1C1A", surface:"#2A2825", surface2:"#36322F", border:"#45403C", border2:"#57524C", text:"#E8E2D9", muted:"#A39B8B", muted2:"#8A837A", glassBg:"rgba(42, 40, 37, 0.75)", gridColor:"rgba(255, 255, 255, 0.05)" },
+  minimal: { bg:"#FFFFFF", canvas:"#FAFAFA", surface:"#FFFFFF", surface2:"#F4F4F4", border:"#E0E0E0", border2:"#CCCCCC", text:"#222222", muted:"#777777", muted2:"#999999", glassBg:"rgba(255, 255, 255, 0.8)", gridColor:"rgba(0, 0, 0, 0.05)" }
 };
 
 const syncSvgSynced = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
@@ -1135,7 +1199,7 @@ fetch("/auth/me").then(r=>r.json()).then(d=>{
 
 // ── Settings, Customization & Themes ──────────────────────────────────────────
 function applyTheme(name) {
-  const t = THEMES[name] || THEMES.midnight;
+  const t = THEMES[name] || THEMES.zen_light;
   const r = document.documentElement;
   r.style.setProperty('--bg', t.bg);
   r.style.setProperty('--canvas-bg', t.canvas);
@@ -1266,9 +1330,8 @@ if(socket) {
         renderChat();
         if(!chatWin.classList.contains("visible")) {
             const btn = document.getElementById("chat-btn");
-            btn.style.boxShadow = "0 0 15px var(--green)";
-            btn.style.borderColor = "var(--green)";
-            setTimeout(()=> { btn.style.boxShadow = "0 4px 12px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.05)"; btn.style.borderColor = "rgba(255, 255, 255, 0.1)"; }, 2000);
+            btn.style.color = "var(--accent)";
+            setTimeout(()=> { btn.style.color = "var(--text)"; }, 2000);
         }
     });
     socket.on("delete_chat_message", data => {
@@ -1549,7 +1612,7 @@ function redrawGroups(){
     if(group.collapsed){
       const hull=document.createElement("div"); hull.className="group-hull collapsed" + (group.pinned ? " pinned-highlight" : ""); hull.dataset.gid=group.id;
       const cx=group.collapsedX||ORIGIN_X,cy=group.collapsedY||ORIGIN_Y; const cw=group.collapsedW||160,ch=group.collapsedH||60;
-      hull.style.cssText=`left:${cx}px;top:${cy}px;width:${cw}px;height:${ch}px;border-color:${group.color};background:${group.color};box-shadow:0 0 18px ${group.color}44;`;
+      hull.style.cssText=`left:${cx}px;top:${cy}px;width:${cw}px;height:${ch}px;border-color:${group.color};background:${group.color};box-shadow:0 8px 32px ${group.color}22;`;
       hull.addEventListener("mousedown",e=>{
         if(e.button!==0)return; if(e.target.classList.contains("group-resize-handle"))return; e.stopPropagation(); draggingGroup=group;
         const cc=clientToCanvas(e.clientX,e.clientY); groupDragOffset={x:cc.x-cx,y:cc.y-cy}; groupDragNodeOffsets=[];
@@ -1560,7 +1623,7 @@ function redrawGroups(){
       hull.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();ctxTargetGroupId=group.id;ctxTargetNodeId=null;buildCtxMenu("group",e.clientX,e.clientY);});
       canvas.appendChild(hull);
       const label=document.createElement("div"); label.className="group-label collapsed-label"; label.textContent=group.name+" ("+group.nodeIds.length+")";
-      label.style.cssText=`left:${cx+8}px;top:${cy+ch/2-7}px;color:${group.color};font-size:11px;`;
+      label.style.cssText=`left:${cx+12}px;top:${cy+ch/2-7}px;color:${group.color};font-size:12px;`;
       label.addEventListener("dblclick",()=>expandGroup(group.id));
       canvas.appendChild(label); return;
     }
@@ -1577,7 +1640,7 @@ function redrawGroups(){
     hull.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();ctxTargetGroupId=group.id;ctxTargetNodeId=null;buildCtxMenu("group",e.clientX,e.clientY);});
     canvas.insertBefore(hull,canvas.firstChild);
     const label=document.createElement("div"); label.className="group-label"; label.textContent=group.name;
-    label.style.cssText=`left:${minX-pad+6}px;top:${minY-pad-18}px;color:${group.color};`;
+    label.style.cssText=`left:${minX-pad+12}px;top:${minY-pad-22}px;color:${group.color};`;
     canvas.insertBefore(label,canvas.firstChild);
   });
 }
@@ -1720,7 +1783,7 @@ function createTimerContent(node){
   const wrap=document.createElement("div");wrap.className="timer-ring"; const svgNS="http://www.w3.org/2000/svg";
   const svg=document.createElementNS(svgNS,"svg");svg.setAttribute("viewBox","0 0 40 40"); const defs=document.createElementNS(svgNS,"defs");
   const grad=document.createElementNS(svgNS,"linearGradient");grad.setAttribute("id","timerGradient");grad.setAttribute("x1","0%");grad.setAttribute("y1","0%");grad.setAttribute("x2","100%");grad.setAttribute("y2","0%");
-  [[0,"#10b981"],[50,"#7c3aed"],[100,"#a78bfa"]].forEach(([off,col])=>{const s=document.createElementNS(svgNS,"stop");s.setAttribute("offset",off+"%");s.setAttribute("stop-color",col);grad.appendChild(s);});
+  [[0,"#C2A878"],[50,"#A69076"],[100,"#8C7761"]].forEach(([off,col])=>{const s=document.createElementNS(svgNS,"stop");s.setAttribute("offset",off+"%");s.setAttribute("stop-color",col);grad.appendChild(s);});
   defs.appendChild(grad);svg.appendChild(defs);
   const bg=document.createElementNS(svgNS,"circle");bg.setAttribute("class","ring-bg");bg.setAttribute("cx","20");bg.setAttribute("cy","20");bg.setAttribute("r","16");
   const prog=document.createElementNS(svgNS,"circle");prog.setAttribute("class","ring-progress");prog.setAttribute("cx","20");prog.setAttribute("cy","20");prog.setAttribute("r","16");
@@ -1734,7 +1797,7 @@ function startTimer(node){
   const el=getNodeEl(node.id);if(!el)return;
   const total=node.meta.seconds;let remaining=total; const{_progressEl:prog,_textEl:txt,_circumference:circ}=node.meta;
   const tickMode=total<=300,start=performance.now();
-  function upd(rem){const f=Math.max(0,Math.min(1,rem/total));if(prog){prog.style.strokeDashoffset=circ*(1-f);if(rem<=0)prog.style.stroke="#3b82f6";}if(txt)txt.textContent=formatTime(rem);}
+  function upd(rem){const f=Math.max(0,Math.min(1,rem/total));if(prog){prog.style.strokeDashoffset=circ*(1-f);if(rem<=0)prog.style.stroke="#8C9CA6";}if(txt)txt.textContent=formatTime(rem);}
   function step(){
     if(!tickMode){remaining=Math.max(0,total-(performance.now()-start)/1000);upd(remaining);if(remaining<=0){node.completed=true;el.classList.add("completed");saveGraph();return;}requestAnimationFrame(step);}
     else{upd(remaining);if(remaining<=0){node.completed=true;el.classList.add("completed");saveGraph();return;}remaining--;setTimeout(step,1000);}
@@ -1804,7 +1867,7 @@ function createNodeElement(node){
     const copyBtn=document.createElement("button");copyBtn.className="copy-btn";copyBtn.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy`;
     copyBtn.onclick=e=>{
       e.stopPropagation();navigator.clipboard.writeText(node.text||"").catch(()=>{});
-      copyBtn.style.color = "var(--green)"; copyBtn.style.borderColor = "var(--green)";
+      copyBtn.style.color = "var(--accent)"; copyBtn.style.borderColor = "var(--accent)";
       copyBtn.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied`;
       setTimeout(()=> {
           copyBtn.style.color = ""; copyBtn.style.borderColor = "";
@@ -1834,7 +1897,7 @@ function createNodeElement(node){
     input.addEventListener("input",e=>{e.stopPropagation();node.meta.topic=input.value; handleNodeInputBroadcast(node); });
     input.addEventListener("change", ()=>saveGraph());
     input.addEventListener("mousedown",e=>{if(document.activeElement===input)e.stopPropagation();}); input.addEventListener("click",e=>{e.stopPropagation();input.focus();}); input.addEventListener("keydown",e=>e.stopPropagation());
-    const runBtn=document.createElement("button");runBtn.className="brainstorm-run";runBtn.textContent="Run";
+    const runBtn=document.createElement("button");runBtn.className="brainstorm-run";runBtn.textContent="Run Idea Tree";
     runBtn.onclick=async (e)=>{
       e.stopPropagation(); if(!input.value.trim())return; runBtn.textContent="Running...";
       
@@ -1856,7 +1919,7 @@ function createNodeElement(node){
             saveGraph();
         }
       } catch(err){ deleteNode(thinkNode.id); }
-      runBtn.textContent="Run";
+      runBtn.textContent="Run Idea Tree";
     };
     wrap.appendChild(input);wrap.appendChild(runBtn); textWrap.appendChild(wrap);
   } else { 
@@ -1883,7 +1946,7 @@ function createNodeElement(node){
   textWrap.appendChild(timeDiv);
 
   if(node.type==="answer" || node.type==="note") {
-    const rh = document.createElement("div"); rh.className = "group-resize-handle"; rh.style.background = "rgba(255,255,255,0.7)"; rh.style.zIndex = 20;
+    const rh = document.createElement("div"); rh.className = "group-resize-handle"; rh.style.background = "rgba(0,0,0,0.1)"; rh.style.zIndex = 20;
     let targetEl = node.type==="answer" ? textWrap.querySelector('.bubble') : textWrap.querySelector('.note-body');
     if(node.meta.w) targetEl.style.width = node.meta.w + "px"; if(node.meta.h) targetEl.style.height = node.meta.h + "px";
     rh.addEventListener("mousedown", e => { e.stopPropagation(); e.preventDefault(); resizingNode = node; resizingTarget = targetEl; resizeStartX = e.clientX; resizeStartY = e.clientY; resizeStartW = targetEl.offsetWidth; resizeStartH = targetEl.offsetHeight; });
@@ -1972,7 +2035,7 @@ function deleteNode(id){
 }
 
 function redrawLinks(){
-  linkLayer.innerHTML=""; const strokeW=Math.max(1.2,1.0/currentScale);
+  linkLayer.innerHTML=""; const strokeW=Math.max(1.5,1.2/currentScale);
   links.forEach(l=>{
     const a=nodes.find(n=>n.id===l.sourceId),b=nodes.find(n=>n.id===l.targetId);if(!a||!b)return;
     const aEl=getNodeEl(a.id),bEl=getNodeEl(b.id);
@@ -1980,7 +2043,7 @@ function redrawLinks(){
     const ax=a.x+5,ay=a.y+5,bx=b.x+5,by=b.y+5;
     const line=document.createElementNS("http://www.w3.org/2000/svg","line"); line.classList.add("edge");line.dataset.id=l.id;
     line.setAttribute("x1",ax);line.setAttribute("y1",ay); line.setAttribute("x2",bx);line.setAttribute("y2",by);
-    line.setAttribute("stroke","rgba(124,58,237,0.35)"); line.setAttribute("stroke-width",strokeW); linkLayer.appendChild(line);
+    line.setAttribute("stroke","rgba(166, 144, 118, 0.4)"); line.setAttribute("stroke-width",strokeW); linkLayer.appendChild(line);
   });
 }
 linkLayer.addEventListener("click",e=>{if(e.target.tagName==="line"&&e.target.classList.contains("edge")&&e.shiftKey)deleteLink(parseInt(e.target.dataset.id,10));});
@@ -2078,7 +2141,7 @@ document.addEventListener("touchend", e => {
 
 // Canvas Pan & Lasso (Mouse)
 canvasWrapper.addEventListener("mousedown",e=>{
-  if(e.target.closest(".node")||e.target.classList.contains("edge")||e.target.closest("#input-bar")||e.target.closest(".suggestion-btn")||e.target.closest(".group-hull")||e.target.closest("#top-bar")||e.target.closest("#zoom-controls")||e.target.closest("#chat-window"))return;
+  if(e.target.closest(".node")||e.target.classList.contains("edge")||e.target.closest("#input-bar-container")||e.target.closest(".suggestion-btn")||e.target.closest(".group-hull")||e.target.closest("#top-bar-container")||e.target.closest("#zoom-controls")||e.target.closest("#chat-window"))return;
   if(e.shiftKey) {
     isLassoing=true; const cc=clientToCanvas(e.clientX, e.clientY); lassoStartX=cc.x; lassoStartY=cc.y;
     lassoBox.style.left=(lassoStartX*currentScale)+"px"; lassoBox.style.top=(lassoStartY*currentScale)+"px"; lassoBox.style.width="0px"; lassoBox.style.height="0px"; lassoBox.style.display="block"; return;
@@ -2144,7 +2207,7 @@ canvasWrapper.addEventListener("touchend", e => {
 });
 
 function deselectAll(){ nodes.forEach(n=>n.selected=false); canvas.querySelectorAll(".node").forEach(el=>el.classList.remove("selected")); updateSuggestionsDebounced(); explicitlyDeselected=true; }
-document.addEventListener("click",e=>{ if(!canvas.contains(e.target)&&!document.getElementById("top-bar").contains(e.target)&&!document.getElementById("input-bar").contains(e.target)&&!suggestionsBar.contains(e.target)&&!colorPickerPopup.contains(e.target)&&!document.getElementById("chat-window").contains(e.target)){deselectAll();hasActiveContext=false;} });
+document.addEventListener("click",e=>{ if(!canvas.contains(e.target)&&!document.getElementById("top-bar-container").contains(e.target)&&!document.getElementById("input-bar-container").contains(e.target)&&!suggestionsBar.contains(e.target)&&!colorPickerPopup.contains(e.target)&&!document.getElementById("chat-window").contains(e.target)){deselectAll();hasActiveContext=false;} });
 
 function getSmartSpawnPos(){
   const sel=getSelectedNodes(); if(sel.length>0){const maxX=Math.max(...sel.map(n=>n.x));const avgY=sel.reduce((s,n)=>s+n.y,0)/sel.length;return{x:maxX+380,y:avgY};}
@@ -2336,17 +2399,17 @@ initZoom(); initCanvas(); loadSettings();
 
 // Tutorial Flow
 const tutSteps = [
-    { t: "Welcome to SecondBrain!", d: "Let's take a quick 1-minute tour to help you get started with your new knowledge graph." },
-    { t: "1. Creating Ideas", d: "Type your questions, ideas, or prompts in the bottom bar and hit Enter. The AI will generate nodes on the canvas. Type / to see useful commands." },
-    { t: "2. Connecting & Selecting", d: "Click to select a node. Shift+Click or Shift+Drag to select multiple. Press 'L' to link selected nodes together. Press 'S' to split links." },
-    { t: "3. Organizing", d: "Drag nodes to move them. Hold down to pan around. Select nodes and press 'G' to group them by color!" }
+    { t: "Welcome to SecondBrain", d: "Let's take a quick 1-minute tour to help you get started with your peaceful new knowledge graph." },
+    { t: "1. Exploring Ideas", d: "Type your questions, ideas, or prompts in the bottom bar and hit Enter. The AI will beautifully lay out answers. Type / to see useful commands." },
+    { t: "2. Connecting Thoughts", d: "Click to select a node. Shift+Click or Shift+Drag to select multiple. Press 'L' to link selected nodes together. Press 'S' to split links." },
+    { t: "3. Curating Focus", d: "Drag nodes to move them. Hold down to pan around. Select nodes and press 'G' to group them into elegant, color-coded spaces." }
 ];
 let tutCurrent = 0;
 function updateTutUI() {
     document.getElementById("tut-title").textContent = tutSteps[tutCurrent].t;
     document.getElementById("tut-desc").textContent = tutSteps[tutCurrent].d;
     document.querySelectorAll(".tut-dot").forEach((d, i) => d.classList.toggle("active", i === tutCurrent));
-    document.getElementById("tut-next-btn").textContent = tutCurrent === tutSteps.length - 1 ? "Get Started" : "Next Step →";
+    document.getElementById("tut-next-btn").textContent = tutCurrent === tutSteps.length - 1 ? "Find Your Zen" : "Next Step →";
 }
 function nextTutorialStep() {
     if(tutCurrent < tutSteps.length - 1) { tutCurrent++; updateTutUI(); }
@@ -2384,30 +2447,30 @@ document.getElementById("dash-btn").onclick = async () => {
         const row = document.createElement("div"); row.className = "dash-item";
         const dateStr = item.updated_at ? item.updated_at.split('T')[0] : 'Recently';
         row.innerHTML = `
-          <div style="flex:1;"><strong>${item.title}</strong><br><span style="color:var(--muted2);font-size:10px;">Updated: ${dateStr}</span></div>
+          <div style="flex:1;"><strong>${item.title}</strong><br><span style="color:var(--muted);font-size:11px;">Updated: ${dateStr}</span></div>
           <div style="display:flex;align-items:center;">
-              <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:4px 8px;font-size:10px;margin-right:8px;">${iconGo} Go</button>
+              <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:6px 12px;font-size:11px;margin-right:8px;">${iconGo} Go</button>
               <button class="dash-delete-btn" onclick="deleteCanvas('${item.share_id}', event)" title="Delete Canvas">${iconTrash}</button>
           </div>
         `;
         myList.appendChild(row);
       });
-    } else { myList.innerHTML = "<div style='color:var(--muted2); font-size:11px; padding:12px;'>No canvases yet.</div>"; }
+    } else { myList.innerHTML = "<div style='color:var(--muted); font-size:12px; padding:12px;'>No canvases yet.</div>"; }
     
     if (d.shared_with_me && d.shared_with_me.length > 0) {
       d.shared_with_me.forEach(item => {
         const row = document.createElement("div"); row.className = "dash-item";
         const dateStr = item.added_at ? item.added_at.split('T')[0] : 'Recently';
         row.innerHTML = `
-          <div style="flex:1;"><strong>${item.title}</strong> (${item.owner_email})<br><span style="color:var(--muted2);font-size:10px;">Added: ${dateStr}</span></div>
+          <div style="flex:1;"><strong>${item.title}</strong> (${item.owner_email})<br><span style="color:var(--muted);font-size:11px;">Added: ${dateStr}</span></div>
           <div style="display:flex;align-items:center;">
-            <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:4px 8px;font-size:10px;margin-right:8px;">${iconGo} Go</button>
+            <button class="modal-btn" onclick="window.location.href='/b/${item.share_id}'" style="padding:6px 12px;font-size:11px;margin-right:8px;">${iconGo} Go</button>
             <button class="dash-delete-btn" onclick="leaveCanvas('${item.share_id}', '${currentUserEmail}', event)" title="Leave Canvas">${iconDoor}</button>
           </div>
         `;
         sharedList.appendChild(row);
       });
-    } else { sharedList.innerHTML = "<div style='color:var(--muted2); font-size:11px; padding:12px;'>No graphs shared with you yet.</div>"; }
+    } else { sharedList.innerHTML = "<div style='color:var(--muted); font-size:12px; padding:12px;'>No graphs shared with you yet.</div>"; }
   } catch(e) { 
     myList.innerHTML = "Error loading."; sharedList.innerHTML = "Error loading."; 
   }
@@ -2459,7 +2522,7 @@ if (socket) {
         const init = (u.email || "A").substring(0, 1).toUpperCase();
         const av = document.createElement("div");
         av.className = "presence-avatar";
-        av.style.background = u.color || "#7c3aed";
+        av.style.background = u.color || "var(--accent)";
         av.style.zIndex = users.length - i;
         av.title = u.email + (u.email === currentUserEmail ? " (You)" : " - Click to jump");
         av.textContent = init;
@@ -2616,8 +2679,8 @@ async function fetchCollaborators() {
       data.collaborators.forEach(c => {
         const el = document.createElement("div"); el.className = "collab-item";
         el.innerHTML = `<span>${c.email}</span>
-        <div style="display:flex;gap:6px;align-items:center;">
-            <span style="color:var(--muted2)">Can Edit</span>
+        <div style="display:flex;gap:8px;align-items:center;">
+            <span style="color:var(--muted)">Can Edit</span>
             ${IS_OWNER ? `<button class="remove-collab-btn" onclick="removeCollab('${c.email}')" title="Remove">✕</button>` : ''}
         </div>`;
         list.appendChild(el);
@@ -2691,13 +2754,13 @@ def index():
         
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT share_id FROM graphs WHERE user_id=%s ORDER BY updated_at DESC LIMIT 1", (session["user_id"],))
+    run_query(cursor, "SELECT share_id FROM graphs WHERE user_id=%s ORDER BY updated_at DESC LIMIT 1", (session["user_id"],))
     row = cursor.fetchone()
     if row:
         share_id = row["share_id"]
     else:
         share_id = secrets.token_urlsafe(12)
-        cursor.execute("INSERT INTO graphs (user_id, data, share_id, title) VALUES (%s, %s, %s, %s)", (session["user_id"], "{}", share_id, "Personal Graph"))
+        run_query(cursor, "INSERT INTO graphs (user_id, data, share_id, title) VALUES (%s, %s, %s, %s)", (session["user_id"], "{}", share_id, "Personal Graph"))
         conn.commit()
     cursor.close()
     conn.close()
@@ -2706,6 +2769,8 @@ def index():
 
 # ── Groq API Calls ────────────────────────────────────────────────────────────
 def call_groq(messages):
+    if not GROQ_API_KEY:
+        return "GROQ_API_KEY environment variable is not set."
     r=requests.post(GROQ_URL,headers={"Authorization":f"Bearer {GROQ_API_KEY}","Content-Type":"application/json"},
                     json={"model":GROQ_MODEL,"messages":messages},timeout=60)
     r.raise_for_status()
@@ -2715,8 +2780,8 @@ def classify_with_groq(user_input):
     sys=(f"Classify a message. Time: {(datetime.utcnow() - timedelta(hours=7)).strftime('%A %B %d %Y %H:%M PDT')}.\n"
          "Return ONLY JSON. Types: timer(+seconds), ai_command(+command), question, text.\n"
          'Examples: {"type":"timer","seconds":180} | {"type":"question"} | {"type":"text"}')
-    raw=call_groq([{"role":"system","content":sys},{"role":"user","content":user_input}])
     try:
+        raw=call_groq([{"role":"system","content":sys},{"role":"user","content":user_input}])
         d=json.loads(raw)
         if isinstance(d,dict) and "type" in d:return d
     except:pass
@@ -2728,29 +2793,35 @@ def chat_with_groq(prompt,context):
     msgs=[{"role":"system","content":sys}]
     if context:msgs.append({"role":"user","content":"Context:\n"+context})
     msgs.append({"role":"user","content":prompt})
-    return call_groq(msgs)
+    try:
+        return call_groq(msgs)
+    except Exception as e:
+        return f"AI Error: Configure your Groq API Key."
 
 def suggest_with_groq(prompt,context):
     sys=('Generate 3 follow-up suggestions. Return ONLY JSON: {"suggestions":["...","...","..."]}. No nodes/graphs.')
     msgs=[{"role":"system","content":sys}]
     if context:msgs.append({"role":"user","content":"Context:\n"+context})
     msgs.append({"role":"user","content":prompt})
-    raw=call_groq(msgs)
     try:
+        raw=call_groq(msgs)
         d=json.loads(raw)
         if isinstance(d,dict) and "suggestions" in d:return d["suggestions"]
     except:pass
     return []
 
 def merge_with_groq(a,b):
-    return call_groq([{"role":"system","content":"Merge two texts into one concise clean version. Don't mention merging."},
-                      {"role":"user","content":"Text A:\n"+a},{"role":"user","content":"Text B:\n"+b}])
+    try:
+        return call_groq([{"role":"system","content":"Merge two texts into one concise clean version. Don't mention merging."},
+                          {"role":"user","content":"Text A:\n"+a},{"role":"user","content":"Text B:\n"+b}])
+    except:
+        return f"{a}\n\n{b}"
 
 def find_with_groq(query,node_descs):
     sys='Graph search: find the single most relevant node. Return ONLY valid JSON: {"nodeId": <id>} or {"nodeId": null}. No markdown tags.'
-    raw=call_groq([{"role":"system","content":sys},
-                   {"role":"user","content":f"Query: {query}\n\nNodes:\n{json.dumps(node_descs)}"}])
     try:
+        raw=call_groq([{"role":"system","content":sys},
+                       {"role":"user","content":f"Query: {query}\n\nNodes:\n{json.dumps(node_descs)}"}])
         clean=raw.strip().strip("```json").strip("```").strip()
         d=json.loads(clean)
         if isinstance(d,dict) and "nodeId" in d:return d
@@ -2790,11 +2861,11 @@ def save_settings():
     try:
         uid = session["user_id"]
         settings_data = json.dumps(request.get_json(), ensure_ascii=False)
-        cursor.execute("SELECT user_id FROM user_settings WHERE user_id=%s", (uid,))
+        run_query(cursor, "SELECT user_id FROM user_settings WHERE user_id=%s", (uid,))
         if cursor.fetchone():
-            cursor.execute("UPDATE user_settings SET settings=%s WHERE user_id=%s", (settings_data, uid))
+            run_query(cursor, "UPDATE user_settings SET settings=%s WHERE user_id=%s", (settings_data, uid))
         else:
-            cursor.execute("INSERT INTO user_settings (user_id, settings) VALUES (%s, %s)", (uid, settings_data))
+            run_query(cursor, "INSERT INTO user_settings (user_id, settings) VALUES (%s, %s)", (uid, settings_data))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -2810,10 +2881,10 @@ def load_settings():
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT settings FROM user_settings WHERE user_id=%s", (session["user_id"],))
+        run_query(cursor, "SELECT settings FROM user_settings WHERE user_id=%s", (session["user_id"],))
         row = cursor.fetchone()
         if not row: return jsonify({}), 404
-        return jsonify(row['settings'])
+        return jsonify(json.loads(row['settings']) if DB_TYPE=="sqlite" else row['settings'])
     finally:
         cursor.close()
         conn.close()
@@ -2836,7 +2907,7 @@ def suggest():
     return jsonify({"suggestions":suggest_with_groq(d.get("prompt",""),d.get("context",""))})
 
 @app.route("/merge",methods=["POST"])
-def merge():
+def merge_nodes():
     if "user_id" not in session:return jsonify({"error":"unauthorized"}),401
     d=request.get_json()
     return jsonify({"merged":merge_with_groq(d.get("a",""),d.get("b",""))})
@@ -2861,7 +2932,7 @@ def board(share_id):
         
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, title FROM graphs WHERE share_id=%s", (share_id,))
+    run_query(cursor, "SELECT user_id, title FROM graphs WHERE share_id=%s", (share_id,))
     graph = cursor.fetchone()
     
     if not graph:
@@ -2873,11 +2944,11 @@ def board(share_id):
             <meta charset="UTF-8">
             <title>Canvas Not Found</title>
             <style>
-                body { background: #000; color: #fff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-                h2 { color: #fff; font-size: 24px; margin-bottom: 10px; }
-                p { color: #6a6a8a; font-size: 14px; margin-bottom: 30px; }
-                a { color: #fff; text-decoration: none; border: 1px solid rgba(124,58,237,0.5); background: rgba(124,58,237,0.1); padding: 10px 20px; border-radius: 8px; transition: all 0.2s; box-shadow: 0 0 15px rgba(124,58,237,0.2); }
-                a:hover { background: #7c3aed; box-shadow: 0 0 25px rgba(124,58,237,0.4); }
+                body { background: #F7F5F0; color: #3E3A35; font-family: 'Outfit', system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                h2 { color: #3E3A35; font-size: 26px; margin-bottom: 12px; font-weight: 500; }
+                p { color: #8A837A; font-size: 15px; margin-bottom: 32px; font-weight: 300;}
+                a { color: #fff; text-decoration: none; border: none; background: #A69076; padding: 12px 24px; border-radius: 12px; transition: all 0.2s; box-shadow: 0 4px 12px rgba(166, 144, 118, 0.2); font-weight: 500; }
+                a:hover { background: #8C7761; box-shadow: 0 6px 16px rgba(166, 144, 118, 0.25); transform: translateY(-1px);}
             </style>
         </head>
         <body>
@@ -2890,7 +2961,7 @@ def board(share_id):
         
     is_owner = (graph["user_id"] == session["user_id"])
     if not is_owner:
-        cursor.execute("SELECT 1 FROM graph_collaborators WHERE graph_id=(SELECT id FROM graphs WHERE share_id=%s) AND user_id=%s", (share_id, session["user_id"]))
+        run_query(cursor, "SELECT 1 FROM graph_collaborators WHERE graph_id=(SELECT id FROM graphs WHERE share_id=%s) AND user_id=%s", (share_id, session["user_id"]))
         if not cursor.fetchone():
             cursor.close()
             conn.close()
@@ -2900,11 +2971,11 @@ def board(share_id):
                 <meta charset="UTF-8">
                 <title>Access Denied</title>
                 <style>
-                    body { background: #000; color: #fff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-                    h2 { color: #fff; font-size: 24px; margin-bottom: 10px; }
-                    p { color: #6a6a8a; font-size: 14px; margin-bottom: 30px; }
-                    a { color: #fff; text-decoration: none; border: 1px solid rgba(124,58,237,0.5); background: rgba(124,58,237,0.1); padding: 10px 20px; border-radius: 8px; transition: all 0.2s; box-shadow: 0 0 15px rgba(124,58,237,0.2); }
-                    a:hover { background: #7c3aed; box-shadow: 0 0 25px rgba(124,58,237,0.4); }
+                    body { background: #F7F5F0; color: #3E3A35; font-family: 'Outfit', system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                    h2 { color: #3E3A35; font-size: 26px; margin-bottom: 12px; font-weight: 500; }
+                    p { color: #8A837A; font-size: 15px; margin-bottom: 32px; font-weight: 300;}
+                    a { color: #fff; text-decoration: none; border: none; background: #A69076; padding: 12px 24px; border-radius: 12px; transition: all 0.2s; box-shadow: 0 4px 12px rgba(166, 144, 118, 0.2); font-weight: 500; }
+                    a:hover { background: #8C7761; box-shadow: 0 6px 16px rgba(166, 144, 118, 0.25); transform: translateY(-1px);}
                 </style>
             </head>
             <body>
@@ -2928,7 +2999,7 @@ def create_board():
     cursor = conn.cursor()
     try:
         share_id = secrets.token_urlsafe(12)
-        cursor.execute("INSERT INTO graphs (user_id, data, share_id, title) VALUES (%s, %s, %s, %s)", (session["user_id"], "{}", share_id, "New Canvas"))
+        run_query(cursor, "INSERT INTO graphs (user_id, data, share_id, title) VALUES (%s, %s, %s, %s)", (session["user_id"], "{}", share_id, "New Canvas"))
         conn.commit()
         return jsonify({"share_id": share_id})
     except Exception as e:
@@ -2944,12 +3015,12 @@ def delete_board(share_id):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, user_id FROM graphs WHERE share_id=%s", (share_id,))
+        run_query(cursor, "SELECT id, user_id FROM graphs WHERE share_id=%s", (share_id,))
         graph = cursor.fetchone()
         if not graph: return jsonify({"error": "Not found"}), 404
         if graph["user_id"] != session["user_id"]: return jsonify({"error": "Only the owner can delete this canvas."}), 403
         
-        cursor.execute("DELETE FROM graphs WHERE id=%s", (graph["id"],))
+        run_query(cursor, "DELETE FROM graphs WHERE id=%s", (graph["id"],))
         conn.commit()
         return jsonify({"ok": True})
     except Exception as e:
@@ -2966,7 +3037,7 @@ def load_shared(share_id):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT data FROM graphs WHERE share_id=%s", (share_id,))
+        run_query(cursor, "SELECT data FROM graphs WHERE share_id=%s", (share_id,))
         row = cursor.fetchone()
         if not row: return jsonify({}), 404
         return jsonify(json.loads(row["data"]))
@@ -2985,7 +3056,7 @@ def update_title():
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE graphs SET title=%s WHERE share_id=%s AND user_id=%s", (title, share_id, session["user_id"]))
+        run_query(cursor, "UPDATE graphs SET title=%s WHERE share_id=%s AND user_id=%s", (title, share_id, session["user_id"]))
         conn.commit()
         return jsonify({"ok": True})
     finally:
@@ -3001,18 +3072,18 @@ def get_dashboard():
         uid = session["user_id"]
         
         # My Graphs
-        cursor.execute("""
+        run_query(cursor, """
             SELECT share_id, title, updated_at 
             FROM graphs 
             WHERE user_id = %s 
             ORDER BY updated_at DESC
         """, (uid,))
-        my_graphs = cursor.fetchall()
+        my_graphs = [dict(row) for row in cursor.fetchall()] if DB_TYPE == "sqlite" else cursor.fetchall()
         for row in my_graphs:
-            if row.get("updated_at"): row["updated_at"] = row["updated_at"].isoformat()
+            if row.get("updated_at") and not isinstance(row["updated_at"], str): row["updated_at"] = row["updated_at"].isoformat()
 
         # Shared with me
-        cursor.execute("""
+        run_query(cursor, """
             SELECT g.share_id, g.title, gc.added_at, g.updated_at, u.email as owner_email
             FROM graph_collaborators gc
             JOIN graphs g ON gc.graph_id = g.id
@@ -3020,10 +3091,10 @@ def get_dashboard():
             WHERE gc.user_id = %s
             ORDER BY gc.added_at DESC
         """, (uid,))
-        shared_with_me = cursor.fetchall()
+        shared_with_me = [dict(row) for row in cursor.fetchall()] if DB_TYPE == "sqlite" else cursor.fetchall()
         for row in shared_with_me:
-            if row.get("added_at"): row["added_at"] = row["added_at"].isoformat()
-            if row.get("updated_at"): row["updated_at"] = row["updated_at"].isoformat()
+            if row.get("added_at") and not isinstance(row["added_at"], str): row["added_at"] = row["added_at"].isoformat()
+            if row.get("updated_at") and not isinstance(row["updated_at"], str): row["updated_at"] = row["updated_at"].isoformat()
                 
         return jsonify({"my_graphs": my_graphs, "shared_with_me": shared_with_me})
     except Exception as e:
@@ -3039,14 +3110,14 @@ def get_collaborators(share_id):
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("""
+        run_query(cursor, """
             SELECT u.email 
             FROM graph_collaborators gc
             JOIN graphs g ON gc.graph_id = g.id
             JOIN users u ON gc.user_id = u.id
             WHERE g.share_id = %s
         """, (share_id,))
-        collabs = cursor.fetchall()
+        collabs = [dict(row) for row in cursor.fetchall()] if DB_TYPE == "sqlite" else cursor.fetchall()
         return jsonify({"collaborators": collabs})
     finally:
         cursor.close()
@@ -3062,18 +3133,16 @@ def invite_collaborator():
     conn = get_db()
     cursor = conn.cursor()
     try:
-        # Check permissions
-        cursor.execute("SELECT id FROM graphs WHERE share_id=%s AND user_id=%s", (share_id, session["user_id"]))
+        run_query(cursor, "SELECT id FROM graphs WHERE share_id=%s AND user_id=%s", (share_id, session["user_id"]))
         graph = cursor.fetchone()
         if not graph: return jsonify({"error": "Only the canvas owner can invite people."})
 
-        # Find user
-        cursor.execute("SELECT id FROM users WHERE email=%s", (email,))
+        run_query(cursor, "SELECT id FROM users WHERE email=%s", (email,))
         user = cursor.fetchone()
         if not user: return jsonify({"error": "User not found. Ask them to sign up first!"})
         if user["id"] == session["user_id"]: return jsonify({"error": "You already own this canvas."})
             
-        cursor.execute("INSERT INTO graph_collaborators (graph_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (graph["id"], user["id"]))
+        run_query(cursor, "INSERT INTO graph_collaborators (graph_id, user_id) VALUES (%s, %s) ON CONFLICT(graph_id, user_id) DO NOTHING" if DB_TYPE=="postgres" else "INSERT OR IGNORE INTO graph_collaborators (graph_id, user_id) VALUES (%s, %s)", (graph["id"], user["id"]))
         conn.commit()
         return jsonify({"ok": True})
     except Exception as e:
@@ -3093,11 +3162,11 @@ def remove_collaborator():
     conn = get_db()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, user_id FROM graphs WHERE share_id=%s", (share_id,))
+        run_query(cursor, "SELECT id, user_id FROM graphs WHERE share_id=%s", (share_id,))
         graph = cursor.fetchone()
         if not graph: return jsonify({"error": "Canvas not found."})
         
-        cursor.execute("SELECT id FROM users WHERE email=%s", (email,))
+        run_query(cursor, "SELECT id FROM users WHERE email=%s", (email,))
         target_user = cursor.fetchone()
         if not target_user: return jsonify({"error": "User not found."})
         
@@ -3107,7 +3176,7 @@ def remove_collaborator():
         if not (is_owner or is_self):
             return jsonify({"error": "Only the canvas owner can remove other collaborators."})
             
-        cursor.execute("DELETE FROM graph_collaborators WHERE graph_id=%s AND user_id=%s", (graph["id"], target_user["id"]))
+        run_query(cursor, "DELETE FROM graph_collaborators WHERE graph_id=%s AND user_id=%s", (graph["id"], target_user["id"]))
         conn.commit()
         
         socketio.emit("collab_removed", {"email": email}, to=share_id)
@@ -3118,7 +3187,7 @@ def remove_collaborator():
         conn.close()
 
 # Socket.IO Handlers
-connected_users = {} # room -> {sid: {email, color}}
+connected_users = {}
 
 @socketio.on("join")
 def on_join(data):
@@ -3129,7 +3198,7 @@ def on_join(data):
     if room not in connected_users:
         connected_users[room] = {}
     
-    colors = ["#f87171","#fb923c","#fbbf24","#a3e635","#34d399","#22d3ee","#60a5fa","#a78bfa","#f472b6"]
+    colors = ["#C2A878","#B5996D","#A39B8B","#D4C3A3","#B89A9A","#9E9B85","#C88A7A","#D9CFC1"]
     color = colors[len(connected_users[room]) % len(colors)]
     
     connected_users[room][request.sid] = {"email": email, "color": color}
@@ -3152,7 +3221,7 @@ def on_cursor_move(data):
             "x": data.get("x"),
             "y": data.get("y"),
             "email": session.get("email", "Anonymous"),
-            "color": connected_users.get(room, {}).get(request.sid, {}).get("color", "#fff")
+            "color": connected_users.get(room, {}).get(request.sid, {}).get("color", "#A69076")
         }, to=room, include_self=False)
 
 @socketio.on("node_move")
@@ -3198,7 +3267,7 @@ def on_graph_update(data):
         conn = get_db()
         cursor = conn.cursor()
         try:
-            cursor.execute("UPDATE graphs SET data=%s, updated_at=CURRENT_TIMESTAMP WHERE share_id=%s", (json.dumps(data.get("graph")), room))
+            run_query(cursor, "UPDATE graphs SET data=%s, updated_at=CURRENT_TIMESTAMP WHERE share_id=%s", (json.dumps(data.get("graph")), room))
             conn.commit()
         except:
             pass
