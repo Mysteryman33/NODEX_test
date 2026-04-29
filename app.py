@@ -490,8 +490,8 @@ body{margin:0;padding:0;background:var(--bg);color:var(--text);
 .node-text{position:relative; white-space:pre-wrap;color:var(--text);transition:opacity .2s ease;}
 .node-time { position: absolute; bottom: -20px; left: 0; font-size: 10px; color: var(--muted); white-space: nowrap; pointer-events: none;}
 
-.dim-0 .node-text{opacity:1;}.dim-1 .node-text{opacity:.75;}
-.dim-2 .node-text{opacity:.55;}.dim-3 .node-text{opacity:.35;}.dim-4 .node-text{opacity:.18;}
+.dim-0 .node-text{opacity:1;}.dim-1 .node-text{opacity:.85;}
+.dim-2 .node-text{opacity:.70;}.dim-3 .node-text{opacity:.60;}.dim-4 .node-text{opacity:.50;}
 .node:hover .node-text{opacity:1!important;}
 .node:hover .node-circle{transform:scale(1.3);}
 
@@ -2040,13 +2040,38 @@ function redrawLinks(){
     const a=nodes.find(n=>n.id===l.sourceId),b=nodes.find(n=>n.id===l.targetId);if(!a||!b)return;
     const aEl=getNodeEl(a.id),bEl=getNodeEl(b.id);
     if((aEl&&aEl.style.display==="none")||(bEl&&bEl.style.display==="none")||!aEl||!bEl)return;
-    const ax=a.x+5,ay=a.y+5,bx=b.x+5,by=b.y+5;
-    const line=document.createElementNS("http://www.w3.org/2000/svg","line"); line.classList.add("edge");line.dataset.id=l.id;
-    line.setAttribute("x1",ax);line.setAttribute("y1",ay); line.setAttribute("x2",bx);line.setAttribute("y2",by);
-    line.setAttribute("stroke","rgba(166, 144, 118, 0.4)"); line.setAttribute("stroke-width",strokeW); linkLayer.appendChild(line);
+    
+    let ax = a.x + 4, ay = a.y + 4, bx = b.x + 4, by = b.y + 4;
+    let dx = bx - ax, dy = by - ay;
+    let dist = Math.hypot(dx, dy);
+    let gap = 16;
+    
+    if (dist > gap * 2) {
+        ax += (dx/dist)*gap; ay += (dy/dist)*gap;
+        bx -= (dx/dist)*gap; by -= (dy/dist)*gap;
+    }
+    
+    const path=document.createElementNS("http://www.w3.org/2000/svg","path"); 
+    path.classList.add("edge");path.dataset.id=l.id;
+    
+    let dStr = "";
+    if (Math.abs(dx) > Math.abs(dy)) {
+        let midX = (ax + bx) / 2;
+        dStr = `M ${ax} ${ay} C ${midX} ${ay}, ${midX} ${by}, ${bx} ${by}`;
+    } else {
+        let midY = (ay + by) / 2;
+        dStr = `M ${ax} ${ay} C ${ax} ${midY}, ${bx} ${midY}, ${bx} ${by}`;
+    }
+    
+    path.setAttribute("d", dStr);
+    path.setAttribute("stroke","rgba(166, 144, 118, 0.4)"); 
+    path.setAttribute("stroke-width",strokeW); 
+    path.setAttribute("fill","none");
+    path.style.transition = "d 0.2s ease-out";
+    linkLayer.appendChild(path);
   });
 }
-linkLayer.addEventListener("click",e=>{if(e.target.tagName==="line"&&e.target.classList.contains("edge")&&e.shiftKey)deleteLink(parseInt(e.target.dataset.id,10));});
+linkLayer.addEventListener("click",e=>{if(e.target.tagName==="path"&&e.target.classList.contains("edge")&&e.shiftKey)deleteLink(parseInt(e.target.dataset.id,10));});
 
 // Hints
 function ensureMergeHint(){if(!mergeHintEl){mergeHintEl=document.createElement("div");mergeHintEl.className="merge-hint";mergeHintEl.textContent="Merge?";canvas.appendChild(mergeHintEl);}}
@@ -2171,9 +2196,11 @@ canvasWrapper.addEventListener("mouseleave",()=>{ isPanning=false;isLassoing=fal
 
 // Canvas Pan & Zoom (Touch)
 let initialPinchDist = null;
+let initialPinchScale = null;
 canvasWrapper.addEventListener("touchstart", e => {
     if(e.touches.length === 2) {
         initialPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        initialPinchScale = currentScale;
         return;
     }
     if(e.target.closest(".node") || e.target.closest(".group-hull") || e.target.closest(".top-btn")) return;
@@ -2186,10 +2213,9 @@ canvasWrapper.addEventListener("touchmove", e => {
     if(e.touches.length === 2) {
         e.preventDefault();
         const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-        if(initialPinchDist) {
-            const delta = (dist - initialPinchDist) * 0.01;
-            applyZoom(currentScale + delta, (e.touches[0].clientX + e.touches[1].clientX)/2, (e.touches[0].clientY + e.touches[1].clientY)/2);
-            initialPinchDist = dist;
+        if(initialPinchDist && initialPinchScale && initialPinchDist > 0) {
+            const newScale = initialPinchScale * (dist / initialPinchDist);
+            applyZoom(newScale, (e.touches[0].clientX + e.touches[1].clientX)/2, (e.touches[0].clientY + e.touches[1].clientY)/2);
         }
         return;
     }
@@ -2202,6 +2228,7 @@ canvasWrapper.addEventListener("touchmove", e => {
 
 canvasWrapper.addEventListener("touchend", e => {
     initialPinchDist = null;
+    initialPinchScale = null;
     if(isPanning && !panMoved) { deselectAll(); hasActiveContext = false; }
     isPanning = false;
 });
@@ -2219,17 +2246,51 @@ document.getElementById("auto-btn").onclick=()=>{
   pushUndo(); const visited=new Set();const components=[];
   function bfs(startId){const comp=[];const q=[startId];visited.add(startId);while(q.length){const id=q.shift();comp.push(id);links.forEach(l=>{const nb=l.sourceId===id?l.targetId:l.targetId===id?l.sourceId:null;if(nb&&!visited.has(nb)&&nodes.find(n=>n.id===nb)){visited.add(nb);q.push(nb);}});}return comp;}
   nodes.forEach(n=>{if(!visited.has(n.id))components.push(bfs(n.id));});
-  const COL_GAP=340,ROW_GAP=120,COMP_GAP_Y=80; let gOffX=ORIGIN_X,gOffY=ORIGIN_Y;
+  
+  const isMobile = window.innerWidth < window.innerHeight;
+  const X_SPACE = isMobile ? 220 : 340; 
+  const Y_SPACE = isMobile ? 180 : 120;
+  const COMP_GAP = 120; 
+  let gOffX=ORIGIN_X, gOffY=ORIGIN_Y;
+
   components.forEach(comp=>{
     if(!comp.length)return;
-    if(comp.length===1){const n=nodes.find(x=>x.id===comp[0]);if(n){n.x=gOffX;n.y=gOffY;}gOffY+=ROW_GAP+COMP_GAP_Y;return;}
+    if(comp.length===1){
+      const n=nodes.find(x=>x.id===comp[0]);
+      if(n){n.x=gOffX;n.y=gOffY;}
+      if(isMobile) { gOffX += X_SPACE + COMP_GAP; } else { gOffY += Y_SPACE + COMP_GAP; }
+      return;
+    }
     const roots=comp.filter(id=>{const n=nodes.find(x=>x.id===id);return n&&n.type==="question";}); let root=roots.length?roots[0]:comp[0];
     const depth=new Map();const children=new Map();comp.forEach(id=>children.set(id,[]));
     const bfsQ=[root];const vis2=new Set([root]);depth.set(root,0);
     while(bfsQ.length){const cur=bfsQ.shift();links.forEach(l=>{let nb=null;if(l.sourceId===cur&&comp.includes(l.targetId))nb=l.targetId;else if(l.targetId===cur&&comp.includes(l.sourceId))nb=l.sourceId;if(nb&&!vis2.has(nb)){vis2.add(nb);depth.set(nb,(depth.get(cur)||0)+1);children.get(cur).push(nb);bfsQ.push(nb);}});}
+    
     const sh=new Map();function calcSH(id){const kids=children.get(id)||[];if(!kids.length){sh.set(id,1);return 1;}const s=kids.reduce((a,k)=>a+calcSH(k),0);sh.set(id,s);return s;}calcSH(root);
-    function assign(id,top){const kids=children.get(id)||[];const n=nodes.find(x=>x.id===id);const d=depth.get(id)||0;const totalH=(sh.get(id)-1)*ROW_GAP;const cy=top+totalH/2;if(n){n.x=gOffX+d*COL_GAP;n.y=cy;}let ct=top;kids.forEach(k=>{assign(k,ct);ct+=sh.get(k)*ROW_GAP;});}
-    assign(root,gOffY); const maxY=Math.max(...comp.map(id=>{const n=nodes.find(x=>x.id===id);return n?n.y:gOffY;})); gOffY=maxY+ROW_GAP+COMP_GAP_Y;
+    
+    function assign(id, lateralOffset){
+      const kids=children.get(id)||[];
+      const n=nodes.find(x=>x.id===id);
+      const d=depth.get(id)||0;
+      const totalSpread=(sh.get(id)-1)*(isMobile ? X_SPACE : Y_SPACE);
+      const center = lateralOffset + totalSpread/2;
+      if(n){
+        if(isMobile) { n.x=center; n.y=gOffY+d*Y_SPACE; }
+        else { n.x=gOffX+d*X_SPACE; n.y=center; }
+      }
+      let ct=lateralOffset;
+      kids.forEach(k=>{assign(k,ct);ct+=sh.get(k)*(isMobile ? X_SPACE : Y_SPACE);});
+    }
+    
+    if (isMobile) {
+      assign(root, gOffX); 
+      const maxY=Math.max(...comp.map(id=>{const n=nodes.find(x=>x.id===id);return n?n.y:gOffY;})); 
+      gOffY=maxY+Y_SPACE+COMP_GAP;
+    } else {
+      assign(root, gOffY); 
+      const maxY=Math.max(...comp.map(id=>{const n=nodes.find(x=>x.id===id);return n?n.y:gOffY;})); 
+      gOffY=maxY+Y_SPACE+COMP_GAP;
+    }
   });
   nodes.forEach(n=>{const el=getNodeEl(n.id);if(el){el.style.left=n.x+"px";el.style.top=n.y+"px";}}); redrawLinks();redrawGroups();saveGraph(); setTimeout(()=>smartRecenter(true),60);
 };
